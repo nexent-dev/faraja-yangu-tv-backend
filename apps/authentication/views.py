@@ -1,0 +1,293 @@
+import random
+from django.utils import timezone
+from django.utils.timezone import timedelta
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from apps.authentication.serializers.profile import ProfileSerializer
+from core.response_wrapper import success_response, error_response
+from rest_framework.decorators import api_view
+from rest_framework.decorators import permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from apps.authentication.models import OTP, User
+from apps.authentication.serializers.user import UserSerializer
+from django.contrib.auth import authenticate
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.conf import settings
+# Create your views here.
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login(request):
+    
+    username = request.data.get('username', None)
+    password = request.data.get('password', None)
+    
+    if not username or not password:
+        return error_response(message='Username and password are required')
+    
+    user = authenticate(username=username, password=password)
+    
+    if not user:
+        return error_response(message='Invalid credentials')
+    
+    if not user.is_active:
+        return error_response(message='User is not active')
+    
+    if not user.is_verified:
+        return error_response(message='User is not verified')
+    
+    # Generate JWT token pair
+    refresh = RefreshToken.for_user(user)
+    access_token = refresh.access_token
+
+    response = success_response(
+        data={
+            'access_token': str(access_token),
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'roles': user.roles.all(),
+            }
+        },
+        message='Login successful'
+    )
+
+    # Set refresh token as HTTP-only cookie
+    response.set_cookie(
+        'refresh_token',
+        str(refresh),
+        max_age=60 * 60 * 24 * 14,  # 14 days (same as REFRESH_TOKEN_LIFETIME)
+        httponly=True,
+        secure=not settings.DEBUG,
+        samesite='Lax'
+    )
+
+    return response
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def complete_profile(request):
+    
+    user = User.objects.filter(id=request.user.id).first()
+    
+    if not user:
+        return error_response(message='User not found')
+    
+    if user.profile:
+        return error_response(message='Profile already completed')
+    
+    serializer = ProfileSerializer(data=request.data)
+    
+    if not serializer.is_valid():
+        return error_response(message=serializer.errors)
+    
+    user.profile = serializer.save()
+    user.save()
+    
+    return success_response(data={}, message='Profile completed successfully')
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def profile(request):
+    
+    user = User.objects.filter(id=request.user.id).first()
+    
+    if not user:
+        return error_response(message='User not found')
+    
+    return success_response(data={
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
+        'first_name': user.first_name,
+        'last_name': user.last_name,
+        'roles': user.roles.all(),
+        'profile': ProfileSerializer(user.profile).data,
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_otp(request):
+    
+    user = User.objects.filter(id=request.user.id).first()
+    
+    if not user:
+        return error_response(message='User not found')
+    
+    if not user.profile:
+        return error_response(message='Profile not found')
+    
+    otp = OTP.objects.filter(user=user).first()
+    
+    if otp:
+        if (timezone.now() - otp.created_at).total_seconds() < 60:
+            return error_response(message='Please wait 60 seconds before resending OTP')
+    
+    if not otp:
+        otp = OTP.objects.create(user=user)
+    
+    otp.otp = random.randint(100000, 999999)
+    otp.expires_at = timezone.now() + timedelta(minutes=30)
+    otp.save()
+    
+    print(otp.otp)
+    
+    return success_response(data={}, message='OTP sent successfully')
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_phone(request):
+    
+    otp = request.data.get('otp', None)
+    
+    if not otp:
+        return error_response(message='OTP is required')
+    
+    user = User.objects.filter(id=request.user.id).first()
+    
+    if not user:
+        return error_response(message='User not found')
+    
+    if not user.profile:
+        return error_response(message='Profile not found')
+    
+    user.profile.is_phone_verified = True
+    user.profile.save()
+    
+    return success_response(data={})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_with_google(request):
+    return success_response(data={})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register(request):
+    
+    first_name = request.data.get('first_name', None)
+    last_name = request.data.get('last_name', None)
+    email = request.data.get('email', None)
+    password = request.data.get('password', None)
+    password_confirmation = request.data.get('password_confirmation', None)
+    
+    if not first_name or not last_name or not email or not password or not password_confirmation:
+        return error_response(message='First name, last name, email, password and password confirmation are required')
+    
+    if password != password_confirmation:
+        return error_response(message='Passwords do not match')
+    
+    if User.objects.filter(email=email).exists():
+        return error_response(message='Email already exists')
+    
+    payload = {key: value for key, value in request.data.items() if value}
+    payload['username'] = email
+    payload['auth_provider'] = 'email'
+    
+    serializer = UserSerializer(data=payload)
+    
+    if not serializer.is_valid():
+        return error_response(message=serializer.errors)
+    
+    user: User = serializer.save()
+    
+    user.set_password(password)
+    user.save()
+    
+    return success_response(data={})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_user(request, id):
+    
+    user = User.objects.get(id=id)
+    user.is_verified = True
+    user.save()
+    
+    return success_response(data={}, message='User verified successfully')
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_otp(request):
+    
+    otp_code = request.data.get('otp', None)
+    
+    otp = OTP.objects.filter(otp=otp_code).first()
+    
+    if not otp:
+        return error_response(message='Invalid OTP')
+    
+    if otp.expires_at < timezone.now():
+        return error_response(message='OTP expired')
+    
+    otp.delete()
+    
+    return success_response(data={}, message='OTP verified successfully')
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def refresh(request):
+    
+    refresh_token = request.COOKIES.get('refresh_token')
+    
+    if not refresh_token:
+        return error_response(message='Refresh token is required')
+    
+    try:
+        refresh = RefreshToken(refresh_token)
+    except Exception as e:
+        return error_response(message='Invalid refresh token')
+    
+    access_token = refresh.access_token
+    
+    response = success_response(data={
+        'access_token': str(access_token),
+    })
+    
+    response.set_cookie(
+        'refresh_token',
+        str(refresh),
+        max_age=60 * 60 * 24 * 14,  # 14 days (same as REFRESH_TOKEN_LIFETIME)
+        httponly=True,
+        secure= not settings.DEBUG,
+        samesite='Lax'
+    )
+    
+    return response
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def logout(request):
+    
+    # Blacklist Access and Refresh Token
+    refresh_token = request.COOKIES.get('refresh_token')
+    
+    if not refresh_token:
+        return error_response(message='Refresh token is required')
+    
+    try:
+        refresh = RefreshToken(refresh_token)
+    except Exception as e:
+        return error_response(message='Invalid refresh token')
+    
+    refresh.blacklist()
+    
+    response = success_response(data={}, message='Logout successful')
+    
+    response.delete_cookie('refresh_token')
+    
+    return response
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_password_reset_with_email(request):
+    return success_response(data={})
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_password_reset_with_phone(request):
+    return success_response(data={})
