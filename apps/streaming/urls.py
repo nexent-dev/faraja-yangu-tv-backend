@@ -17,6 +17,7 @@ urlpatterns = [
     path('search/', views.get_search, name='search-list'),
     path('get-banner-ads/', views.get_banner_ads, name='get-banner-ads-list'),
     
+    path('get-all-videos/', views.get_all_videos, name='get-all-video-list'),
     path('get-videos/<int:category_id>/', views.get_videos, name='get-video-list'),
     path('get-video/<int:pk>/', views.get_video, name='get-video-detail'),
     path('get-video-comments/<int:pk>/', views.get_video_comments, name='get-video-comments-list'),

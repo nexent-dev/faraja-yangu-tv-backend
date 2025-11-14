@@ -9,6 +9,9 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.decorators import permission_classes
 from .serializers.category import CategorySerializer
 from .tasks import convert_video_to_hls
+import logging
+
+logger = logging.getLogger(__name__)
 # Create your views here.
 
 @api_view(['POST'])
@@ -117,11 +120,18 @@ def create_video(request):
         video = serializer.save()
         
         # Trigger async HLS conversion task
-        convert_video_to_hls.delay(video.id)
+        try:
+            task = convert_video_to_hls.delay(video.id)
+            logger.info(f"Queued HLS conversion task {task.id} for video {video.id}")
+            message = 'Video uploaded successfully. HLS conversion in progress.'
+        except Exception as e:
+            # If Celery/Redis is not available, log the error
+            logger.error(f"Could not queue video conversion task for video {video.id}: {str(e)}", exc_info=True)
+            message = 'Video uploaded successfully. Conversion will start when processing service is available.'
         
         # Return response with processing status
         response_data = serializer.data
-        response_data['message'] = 'Video uploaded successfully. HLS conversion in progress.'
+        response_data['message'] = message
         response_data['processing_status'] = 'pending'
         
         return success_response(response_data)
@@ -145,8 +155,15 @@ def delete_video(request, pk):
     return success_response()
 
 @api_view(['GET'])
+def get_all_videos(request):
+    feed = Video.objects.all()
+    serializer = VideoSerializer(feed, many=True)
+    return success_response(serializer.data)
+
+@api_view(['GET'])
 def get_video(request, pk):
-    feed = Category.objects.all()
+    feed = Video.objects.get(pk=pk)
+    serializer = VideoSerializer(feed)
     return success_response(feed)
 
 @api_view(['GET'])

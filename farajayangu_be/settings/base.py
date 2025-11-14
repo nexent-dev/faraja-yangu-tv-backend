@@ -102,6 +102,7 @@ SIMPLE_JWT = {
 }
 
 INSTALLED_APPS = [
+    'channels',
     "django.contrib.admin",
     "django.contrib.auth",
     'storages',
@@ -134,7 +135,7 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'farajayangu_be.urls'
-WSGI_APPLICATION = 'farajayangu_be.wsgi.application'
+# WSGI_APPLICATION = 'farajayangu_be.wsgi.application'
 ASGI_APPLICATION = 'farajayangu_be.asgi.application'
 
 
@@ -162,8 +163,42 @@ DATABASES = {
         'PASSWORD': DATABASE_PASSWORD,
         'HOST': DATABASE_HOST,
         'PORT': DATABASE_PORT,
+        # Reduced connection age for better resilience
+        'CONN_MAX_AGE': 30,
+        'OPTIONS': {
+            # Connection timeout settings - increased for network issues
+            'connect_timeout': 30,
+            # TCP keepalive settings for connection health
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
+            # Application name for connection tracking
+            'application_name': 'farajayangutv_backend',
+        },
+        # Set a reasonable test timeout
+        'TEST': {
+            'MIGRATE': True,
+        },
     }
 }
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/1"],
+
+            "channel_capacity": {
+                'http.request': 200,
+                'http.response!*': 200,
+                'websocket.receive': 200,
+                'websocket.send': 200,
+            },
+        }
+    }
+}
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -232,12 +267,27 @@ HLS_OUTPUT_DIR = 'videos/hls'  # Base directory for HLS files
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')  # Local media root for temp processing
 
 # Celery Configuration for video processing
-CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
-CELERY_RESULT_BACKEND = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+# Build Redis URL with proper authentication
+if REDIS_PASSWORD and REDIS_PASSWORD not in ['', 'your-redis-password']:
+    # Format: redis://[username]:password@host:port/db
+    if REDIS_USER and REDIS_USER not in ['', 'your-redis-user']:
+        CELERY_BROKER_URL = f'redis://{REDIS_USER}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0'
+        CELERY_RESULT_BACKEND = f'redis://{REDIS_USER}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0'
+    else:
+        # No username, only password
+        CELERY_BROKER_URL = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0'
+        CELERY_RESULT_BACKEND = f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0'
+else:
+    # No authentication
+    CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+    CELERY_RESULT_BACKEND = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes max for video processing
 
 # print(DEFAULT_FILE_STORAGE)
 

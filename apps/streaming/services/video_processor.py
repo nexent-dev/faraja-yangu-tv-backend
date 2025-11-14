@@ -5,11 +5,34 @@ Converts uploaded MP4 videos to HLS format with multiple quality levels.
 import os
 import subprocess
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+def check_ffmpeg_installed():
+    """Check if FFmpeg is installed and accessible."""
+    ffmpeg_path = shutil.which('ffmpeg')
+    
+    # If not in PATH, try common Windows Chocolatey location
+    if not ffmpeg_path:
+        choco_ffmpeg = r"C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe"
+        if os.path.exists(choco_ffmpeg):
+            ffmpeg_path = choco_ffmpeg
+        else:
+            raise RuntimeError(
+                "FFmpeg is not installed or not in PATH. "
+                "Please install FFmpeg:\n"
+                "Windows: choco install ffmpeg OR download from https://ffmpeg.org/download.html\n"
+                "Linux: sudo apt-get install ffmpeg\n"
+                "macOS: brew install ffmpeg"
+            )
+    
+    logger.info(f"FFmpeg found at: {ffmpeg_path}")
+    return ffmpeg_path
 
 
 class VideoProcessor:
@@ -63,7 +86,10 @@ class VideoProcessor:
         """
         self.input_path = input_path
         self.output_dir = output_dir
-        self.segment_duration = 6  # seconds per segment
+        self.segment_duration = getattr(settings, 'HLS_SEGMENT_DURATION', 6)
+        
+        # Check FFmpeg availability
+        self.ffmpeg_path = check_ffmpeg_installed()
         
     def convert_to_hls(self) -> Dict[str, any]:
         """
@@ -125,7 +151,7 @@ class VideoProcessor:
             
             # FFmpeg command for HLS conversion
             cmd = [
-                'ffmpeg',
+                self.ffmpeg_path,
                 '-i', self.input_path,
                 '-c:v', 'libx264',
                 '-c:a', 'aac',
@@ -203,8 +229,24 @@ class VideoProcessor:
             Duration in seconds
         """
         try:
+            # Use ffprobe from the same directory as ffmpeg
+            if self.ffmpeg_path.endswith('.exe'):
+                ffprobe_path = self.ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe')
+            else:
+                ffprobe_path = self.ffmpeg_path.replace('ffmpeg', 'ffprobe')
+            
+            if not os.path.exists(ffprobe_path):
+                ffprobe_path = shutil.which('ffprobe')
+                if not ffprobe_path:
+                    # Try Chocolatey location
+                    choco_ffprobe = r"C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffprobe.exe"
+                    if os.path.exists(choco_ffprobe):
+                        ffprobe_path = choco_ffprobe
+                    else:
+                        ffprobe_path = 'ffprobe'
+            
             cmd = [
-                'ffprobe',
+                ffprobe_path,
                 '-v', 'error',
                 '-show_entries', 'format=duration',
                 '-of', 'default=noprint_wrappers=1:nokey=1',

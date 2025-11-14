@@ -9,11 +9,10 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from apps.streaming.models import Video
 from apps.streaming.services.video_processor import VideoProcessor
-
+from farajayangu_be.celery import app as celery_app
 logger = logging.getLogger(__name__)
 
-
-@shared_task(bind=True, max_retries=3)
+@celery_app.task(bind=True)
 def convert_video_to_hls(self, video_id: int):
     """
     Convert uploaded video to HLS format with multiple quality levels.
@@ -24,6 +23,7 @@ def convert_video_to_hls(self, video_id: int):
     Returns:
         Dictionary with conversion results
     """
+    
     try:
         # Get video object
         video = Video.objects.get(id=video_id)
@@ -36,19 +36,21 @@ def convert_video_to_hls(self, video_id: int):
         if not video.video:
             raise ValueError("No video file uploaded")
         
-        # Download video from storage if using remote storage (e.g., S3/R2)
-        video_file_path = video.video.path if hasattr(video.video, 'path') else None
+        # Download video from remote storage (R2/S3) to local temp file
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        video_file_path = os.path.join(temp_dir, f"video_{video_id}_original.mp4")
         
-        if not video_file_path:
-            # For remote storage, download to temp location
-            video_file_path = f"/tmp/video_{video_id}_original.mp4"
-            with default_storage.open(video.video.name, 'rb') as source:
-                with open(video_file_path, 'wb') as dest:
-                    dest.write(source.read())
+        logger.info(f"Downloading video from storage: {video.video.name}")
+        with default_storage.open(video.video.name, 'rb') as source:
+            with open(video_file_path, 'wb') as dest:
+                dest.write(source.read())
+        logger.info(f"Video downloaded to: {video_file_path}")
         
-        # Define output directory for HLS files
-        hls_output_dir = f"videos/hls/{video.slug}"
-        local_hls_dir = os.path.join(settings.MEDIA_ROOT, hls_output_dir) if hasattr(settings, 'MEDIA_ROOT') else f"/tmp/hls_{video_id}"
+        # Define output directory for HLS files (use temp directory, NOT server storage)
+        hls_output_dir = f"videos/hls/{video.slug}"  # Remote path in R2
+        import tempfile
+        local_hls_dir = os.path.join(tempfile.gettempdir(), f"hls_{video_id}")  # Local temp only
         
         # Initialize video processor
         processor = VideoProcessor(
@@ -62,8 +64,9 @@ def convert_video_to_hls(self, video_id: int):
         if not result['success']:
             raise Exception(result.get('error', 'Unknown conversion error'))
         
-        # Upload HLS files to storage
+        # Upload HLS files from temp directory to R2 storage
         uploaded_paths = upload_hls_files_to_storage(local_hls_dir, hls_output_dir)
+        logger.info(f"Uploaded {len(uploaded_paths)} files to R2 storage")
         
         # Update video object with HLS information
         video.hls_path = hls_output_dir
@@ -79,16 +82,17 @@ def convert_video_to_hls(self, video_id: int):
             'processing_error'
         ])
         
-        # Clean up: Delete original video file to save storage
+        # Clean up: Delete original video file from R2 to save storage costs
         if video.video:
             try:
                 video.video.delete(save=False)
-                logger.info(f"Deleted original video file for video {video_id}")
+                logger.info(f"Deleted original MP4 from R2 for video {video_id}")
             except Exception as e:
-                logger.warning(f"Could not delete original video: {str(e)}")
+                logger.warning(f"Could not delete original video from R2: {str(e)}")
         
-        # Clean up local temp files
+        # Clean up: Delete ALL local temp files (video + HLS directory)
         cleanup_local_files(video_file_path, local_hls_dir)
+        logger.info(f"Cleaned up local temp files for video {video_id}")
         
         logger.info(f"Successfully converted video {video_id} to HLS")
         
@@ -116,7 +120,7 @@ def convert_video_to_hls(self, video_id: int):
             pass
         
         # Retry the task
-        raise self.retry(exc=e, countdown=60)
+        raise 
 
 
 def upload_hls_files_to_storage(local_dir: str, remote_dir: str) -> list:
@@ -165,16 +169,23 @@ def cleanup_local_files(video_file_path: str, hls_dir: str):
         hls_dir: Path to HLS output directory
     """
     try:
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        
         # Remove original video if it's a temp file
-        if video_file_path and video_file_path.startswith('/tmp/') and os.path.exists(video_file_path):
-            os.remove(video_file_path)
-            logger.debug(f"Removed temp video file: {video_file_path}")
+        if video_file_path and os.path.exists(video_file_path):
+            # Check if file is in temp directory
+            if os.path.dirname(video_file_path).startswith(temp_dir):
+                os.remove(video_file_path)
+                logger.debug(f"Removed temp video file: {video_file_path}")
         
         # Remove HLS directory if it's a temp location
-        if hls_dir and hls_dir.startswith('/tmp/') and os.path.exists(hls_dir):
-            import shutil
-            shutil.rmtree(hls_dir)
-            logger.debug(f"Removed temp HLS directory: {hls_dir}")
+        if hls_dir and os.path.exists(hls_dir):
+            # Check if directory is in temp directory
+            if hls_dir.startswith(temp_dir):
+                import shutil
+                shutil.rmtree(hls_dir)
+                logger.debug(f"Removed temp HLS directory: {hls_dir}")
             
     except Exception as e:
         logger.warning(f"Error during cleanup: {str(e)}")
