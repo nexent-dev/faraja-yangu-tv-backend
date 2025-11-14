@@ -53,9 +53,9 @@ COPY .config/site.com /etc/nginx/sites-enabled/default
 
 # Copy the start script and ensure it's executable
 COPY .entry/start_core_backend.sh /app/start_core_backend.sh
-COPY .entry/start_web_backend.sh /app/start_web_backend.sh
+COPY .entry/start_tasks_backend.sh /app/start_tasks_backend.sh
 RUN chmod +x /app/start_core_backend.sh
-RUN chmod +x /app/start_web_backend.sh
+RUN chmod +x /app/start_tasks_backend.sh
 
 # Expose port 80 for the web server
 EXPOSE 80
