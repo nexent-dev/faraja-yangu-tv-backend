@@ -35,7 +35,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN python3.12 -m pip install --upgrade --ignore-installed pip setuptools wheel && \
-    python3.12 -m pip install --break-system-packages cffi && \
     python3.12 -m pip install --break-system-packages 'uvicorn[standard]' && \
     python3.12 -m pip install --break-system-packages -r requirements.txt && \
     python3.12 -m pip install --break-system-packages psycopg2-binary==2.9.10
