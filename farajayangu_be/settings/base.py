@@ -17,6 +17,7 @@ DEBUG = env.bool('DEBUG', default=True)
 SECRET_KEY = env('SECRET_KEY', default='your-secret-key')
 REFRESH_TOKEN_SECRET = env('SECRET_KEY', default='your-secret-key')
 BASE_URL = env('BASE_URL', default='http://127.0.0.1:8000')
+BACKEND_URL = env('BACKEND_URL', default='https://backend.farajayangutv.co.tz')
 
 DATABASE_ENGINE = env('DATABASE_ENGINE', default='django.db.backends.sqlite3')
 DATABASE_NAME = env('DATABASE_NAME', default='db.sqlite3')

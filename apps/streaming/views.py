@@ -9,9 +9,56 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.decorators import permission_classes
 from .serializers.category import CategorySerializer
 from .tasks import convert_video_to_hls
+from django.http import HttpResponse, Http404, FileResponse
+from django.core.files.storage import default_storage
 import logging
+import mimetypes
 
 logger = logging.getLogger(__name__)
+
+
+def inject_ad_markers(playlist_content: str, video_slug: str, ad_interval: int = 120) -> str:
+    """
+    Inject ad markers into HLS playlist for client-side ad insertion.
+    
+    Args:
+        playlist_content: Original playlist content
+        video_slug: Video slug for tracking
+        ad_interval: Seconds between ad breaks (default: 120 = 2 minutes)
+    
+    Returns:
+        Modified playlist with ad markers
+    """
+    lines = playlist_content.split('\n')
+    new_lines = []
+    current_duration = 0.0
+    last_ad_time = 0.0
+    ad_count = 0
+    
+    for line in lines:
+        # Track segment duration
+        if line.startswith('#EXTINF:'):
+            try:
+                # Extract duration from #EXTINF:10.0,
+                duration_str = line.split(':')[1].split(',')[0]
+                segment_duration = float(duration_str)
+                current_duration += segment_duration
+                
+                # Check if it's time for an ad break
+                if current_duration - last_ad_time >= ad_interval:
+                    ad_count += 1
+                    # Insert ad markers before this segment
+                    new_lines.append(f'#EXT-X-CUE-OUT:DURATION=30')
+                    new_lines.append(f'#EXT-X-ASSET:CAID=ad-{ad_count}')
+                    logger.info(f"Injected ad marker {ad_count} at {current_duration}s for {video_slug}")
+                    last_ad_time = current_duration
+            except (IndexError, ValueError):
+                pass
+        
+        new_lines.append(line)
+    
+    return '\n'.join(new_lines)
+
 # Create your views here.
 
 @api_view(['POST'])
@@ -136,6 +183,150 @@ def create_video(request):
         
         return success_response(response_data)
     return error_response(serializer.errors)
+
+@api_view(['GET'])
+def stream_hls(request, video_slug, file_path):
+    """
+    Stream HLS files with ad injection support.
+    
+    This endpoint proxies HLS files from R2 storage and modifies playlists
+    to inject ad markers for client-side ad insertion.
+    
+    Args:
+        video_slug: The video slug
+        file_path: Path to the HLS file (e.g., 'master.m3u8', '1080p/1080p.m3u8', '1080p/1080p_001.ts')
+    
+    Returns:
+        HLS file with appropriate content type and ad markers
+    """
+    try:
+        # Construct the full path in R2 storage
+        storage_path = f"videos/hls/{video_slug}/{file_path}"
+        
+        # Check if file exists in storage
+        if not default_storage.exists(storage_path):
+            logger.warning(f"HLS file not found: {storage_path}")
+            raise Http404("Video file not found")
+        
+        # Determine content type based on file extension
+        content_type, _ = mimetypes.guess_type(file_path)
+        if file_path.endswith('.m3u8'):
+            content_type = 'application/vnd.apple.mpegurl'
+        elif file_path.endswith('.ts'):
+            content_type = 'video/mp2t'
+        else:
+            content_type = content_type or 'application/octet-stream'
+        
+        # For playlist files, modify content to inject ad markers
+        if file_path.endswith('.m3u8'):
+            # Read playlist content
+            file_obj = default_storage.open(storage_path, 'rb')
+            content = file_obj.read().decode('utf-8')
+            file_obj.close()
+            
+            # Modify playlist URLs to point to backend proxy
+            from django.conf import settings
+            backend_url = getattr(settings, 'BACKEND_URL', 'https://backend.farajayangutv.co.tz')
+            
+            # Replace relative paths with backend URLs
+            modified_content = content
+            lines = content.split('\n')
+            new_lines = []
+            
+            for line in lines:
+                # Skip comments and empty lines
+                if line.startswith('#') or not line.strip():
+                    new_lines.append(line)
+                    continue
+                
+                # If it's a file reference (not a URL), convert to backend URL
+                if line.strip() and not line.startswith('http'):
+                    # Construct backend URL for the file
+                    if '/' in line:
+                        # Variant playlist reference (e.g., "1080p/1080p.m3u8")
+                        new_line = f"{backend_url}/streaming/hls/{video_slug}/{line.strip()}"
+                    else:
+                        # Segment reference (e.g., "1080p_001.ts")
+                        # Get directory from current file_path
+                        import os
+                        current_dir = os.path.dirname(file_path)
+                        if current_dir:
+                            new_line = f"{backend_url}/streaming/hls/{video_slug}/{current_dir}/{line.strip()}"
+                        else:
+                            new_line = f"{backend_url}/streaming/hls/{video_slug}/{line.strip()}"
+                    new_lines.append(new_line)
+                else:
+                    new_lines.append(line)
+            
+            modified_content = '\n'.join(new_lines)
+            
+            # Inject ad markers for variant playlists (not master playlist)
+            if '/' in file_path:  # This is a variant playlist like "1080p/1080p.m3u8"
+                modified_content = inject_ad_markers(modified_content, video_slug, ad_interval=120)
+            
+            # Return modified playlist
+            response = HttpResponse(modified_content, content_type=content_type)
+        else:
+            # For video segments (.ts files), stream directly
+            file_obj = default_storage.open(storage_path, 'rb')
+            response = FileResponse(file_obj, content_type=content_type)
+        
+        # Add CORS headers for cross-origin streaming
+        response['Access-Control-Allow-Origin'] = '*'
+        response['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response['Access-Control-Allow-Headers'] = 'Range'
+        
+        # Add caching headers for better performance
+        if file_path.endswith('.ts'):
+            # Cache segments for longer (they don't change)
+            response['Cache-Control'] = 'public, max-age=31536000'
+        else:
+            # Cache playlists for shorter time (to allow ad updates)
+            response['Cache-Control'] = 'public, max-age=10'
+        
+        logger.info(f"Streaming HLS file: {storage_path}")
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error streaming HLS file {video_slug}/{file_path}: {str(e)}")
+        raise Http404("Error loading video file")
+
+@api_view(['GET'])
+def get_video_stream_url(request, pk):
+    """
+    Get the streaming URL for a video.
+    
+    Returns:
+        Video details with HLS streaming URL from R2 storage
+    """
+    try:
+        video = Video.objects.get(pk=pk)
+        
+        if not video.is_ready_for_streaming:
+            return error_response({
+                'message': 'Video is still processing',
+                'processing_status': video.processing_status
+            })
+        
+        # Construct backend streaming URL for ad injection
+        from django.conf import settings
+        backend_url = getattr(settings, 'BACKEND_URL', 'https://backend.farajayangutv.co.tz')
+        
+        # Use backend proxy URL to enable ad injection
+        stream_url = f"{backend_url}/streaming/hls/{video.slug}/master.m3u8"
+        
+        return success_response({
+            'id': video.id,
+            'title': video.title,
+            'slug': video.slug,
+            'stream_url': stream_url,
+            'is_ready': video.is_ready_for_streaming,
+            'duration': str(video.duration) if video.duration else None,
+            'thumbnail': video.thumbnail.url if video.thumbnail else None,
+        })
+        
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])

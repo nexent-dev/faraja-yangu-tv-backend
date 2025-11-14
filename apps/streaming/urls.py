@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, re_path
 from . import views
 
 app_name = 'streaming'
@@ -35,4 +35,7 @@ urlpatterns = [
     path('reply/<int:comment_id>/', views.reply, name='reply'),
     path('view/<int:video_id>/', views.view, name='view'),
     
+    # HLS Streaming endpoints
+    path('stream/<int:pk>/', views.get_video_stream_url, name='get-stream-url'),
+    re_path(r'^hls/(?P<video_slug>[\w-]+)/(?P<file_path>.+)$', views.stream_hls, name='stream-hls'),
 ]
