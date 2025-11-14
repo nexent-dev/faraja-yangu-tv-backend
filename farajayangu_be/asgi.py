@@ -6,7 +6,7 @@ from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from django.urls import path
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'farajayangu_be.settings.dev')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'farajayangu_be.settings.base')
 django.setup()
 
 # Import routing after Django is set up to avoid app registry errors
