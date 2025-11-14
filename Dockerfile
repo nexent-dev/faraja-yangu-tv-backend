@@ -14,7 +14,7 @@ RUN apt-get update && \
     apt-get install -y libffi-dev && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && \
-    apt-get install -y nano nginx tzdata python3.9 python3.9-full python3.9-dev python3.9-distutils python3-pip && \
+    apt-get install -y nano nginx tzdata python3.10 python3.10-full python3.10-dev python3.10-distutils python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
 # Configure the timezone non-interactively
@@ -34,11 +34,11 @@ RUN apt-get update && \
     apt-get install -y ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3.9 -m pip install --upgrade --ignore-installed pip setuptools==69.5.1 wheel && \
-    python3.9 -m pip install --break-system-packages cffi && \
-    python3.9 -m pip install --break-system-packages 'uvicorn[standard]' && \
-    python3.9 -m pip install --break-system-packages -r requirements.txt && \
-    python3.9 -m pip install --break-system-packages psycopg2-binary==2.9.10
+RUN python3.10 -m pip install --upgrade --ignore-installed pip setuptools==69.5.1 wheel && \
+    python3.10 -m pip install --break-system-packages cffi && \
+    python3.10 -m pip install --break-system-packages 'uvicorn[standard]' && \
+    python3.10 -m pip install --break-system-packages -r requirements.txt && \
+    python3.10 -m pip install --break-system-packages psycopg2-binary==2.9.10
 
 # Add xiron to Python path
 ENV PYTHONPATH="/app:${PYTHONPATH}"
