@@ -16,13 +16,12 @@ boto3==1.40.69
 celery==5.5.3
 certifi==2025.10.5
 cffi==2.0.0
-channels==4.3.1
-channels-redis==4.2.0
+channels==4.2.0
+daphne==4.1.2
 chardet==5.2.0
 charset-normalizer==3.4.4
 Django==5.2.8
 django-background-tasks==1.2.8
-django-channels
 django-celery==3.1.17
 django-celery-beat==2.8.1
 django-cors-headers==4.9.0
