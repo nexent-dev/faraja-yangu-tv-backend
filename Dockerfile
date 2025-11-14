@@ -17,8 +17,6 @@ RUN apt-get update && \
     apt-get install -y nano nginx tzdata python3.12 python3.12-dev python3-pip && \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3.12 -m ensurepip --upgrade
-
 # Configure the timezone non-interactively
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
