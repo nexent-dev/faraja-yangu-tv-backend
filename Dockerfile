@@ -37,8 +37,7 @@ RUN apt-get update && \
 RUN python3.9 -m pip install --upgrade --ignore-installed pip setuptools==69.5.1 wheel && \
     python3.9 -m pip install --break-system-packages cffi && \
     python3.9 -m pip install --break-system-packages 'uvicorn[standard]' && \
-    python3.9 -m pip install --break-system-packages -r requirements.txt && \
-    python3.9 -m pip install --break-system-packages psycopg2-binary==2.9.10
+    python3.9 -m pip install --break-system-packages -r requirements.txt
 
 # Add xiron to Python path
 ENV PYTHONPATH="/app:${PYTHONPATH}"
