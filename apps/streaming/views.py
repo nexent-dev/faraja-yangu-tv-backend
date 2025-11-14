@@ -11,8 +11,12 @@ from .serializers.category import CategorySerializer
 from .tasks import convert_video_to_hls
 from django.http import HttpResponse, Http404, FileResponse
 from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 import logging
 import mimetypes
+import os
+import hashlib
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -99,44 +103,244 @@ def get_categories(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_category(request, pk):
+    include_videos = request.GET.get('include_videos', 'false').lower() == 'true'
+    video_count = int(request.GET.get('video_count', 10))
+    parents = request.GET.get('parents_only', 'false').lower() == 'true'
+    
     category = Category.objects.get(pk=pk)
-    serializer = CategorySerializer(category)
+    serializer = CategorySerializer(
+        category, 
+        include_videos=include_videos, 
+        video_count=video_count,
+        parents=parents
+    )
+    
+    return success_response(serializer.data)
+
+@api_view(['GET'])
+def get_category_videos(request, pk):
+    category = Category.objects.get(pk=pk)
+    videos = Video.objects.filter(category=category)
+    serializer = VideoSerializer(videos, many=True)
     return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_subcategories(request, category_id):
     subcategories = Category.objects.filter(parent_id=category_id)
-    return success_response(subcategories)
+    serializer = CategorySerializer(subcategories, many=True)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_subcategory(request, pk):
     subcategory = Category.objects.get(pk=pk)
-    return success_response(subcategory)
+    serializer = CategorySerializer(subcategory)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_feed(request):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_recent_feed(request):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_search(request):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_videos(request, category_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_banner_ads(request):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_chunk(request):
+    """
+    Upload a chunk of video data for resumable/chunked uploads.
+    
+    Expected request data (camelCase):
+    - chunk: The file chunk (from request.FILES)
+    - videoId: ID of the video being uploaded
+    - chunkIndex: Current chunk number (0-based)
+    - totalChunks: Total number of chunks
+    - fileName: Original filename
+    """
+    try:
+        # Validate required fields (camelCase from frontend)
+        chunk_file = request.FILES.get('chunk')
+        video_id = request.data.get('videoId')
+        chunk_index = request.data.get('chunkIndex')
+        total_chunks = request.data.get('totalChunks')
+        filename = request.data.get('fileName')
+        
+        if not all([chunk_file, video_id, chunk_index is not None, total_chunks, filename]):
+            return error_response({
+                'error': 'Missing required fields',
+                'required': ['chunk', 'videoId', 'chunkIndex', 'totalChunks', 'fileName']
+            })
+        
+        # Convert to integers
+        try:
+            chunk_index = int(chunk_index)
+            total_chunks = int(total_chunks)
+        except ValueError:
+            return error_response({'error': 'chunkIndex and totalChunks must be integers'})
+        
+        # Verify video exists
+        try:
+            video = Video.objects.get(id=video_id)
+        except Video.DoesNotExist:
+            return error_response({'error': f'Video with id {video_id} not found'})
+        
+        # Create chunk storage directory
+        chunk_dir = f"videos/chunks/{video_id}"
+        
+        # Save chunk using Django storage system
+        chunk_filename = f"chunk_{chunk_index:04d}"
+        chunk_path = os.path.join(chunk_dir, chunk_filename)
+        
+        # Save the chunk
+        saved_path = default_storage.save(chunk_path, chunk_file)
+        logger.info(f"Saved chunk {chunk_index}/{total_chunks} for video {video_id} at {saved_path}")
+        
+        # Check if all chunks are uploaded
+        uploaded_chunks = []
+        for i in range(total_chunks):
+            test_chunk_path = os.path.join(chunk_dir, f"chunk_{i:04d}")
+            if default_storage.exists(test_chunk_path):
+                uploaded_chunks.append(i)
+        
+        is_complete = len(uploaded_chunks) == total_chunks
+        
+        response_data = {
+            'message': f'Chunk {chunk_index + 1}/{total_chunks} uploaded successfully',
+            'chunk_index': chunk_index,
+            'total_chunks': total_chunks,
+            'uploaded_chunks': len(uploaded_chunks),
+            'is_complete': is_complete
+        }
+        
+        # If all chunks uploaded, trigger assembly
+        if is_complete:
+            response_data['message'] = 'All chunks uploaded. Ready for assembly.'
+            response_data['next_step'] = 'Call /api/streaming/assemble-chunks/ to combine chunks'
+        
+        return success_response(response_data)
+        
+    except Exception as e:
+        logger.error(f"Error uploading chunk: {str(e)}", exc_info=True)
+        return error_response({'error': str(e)})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def assemble_chunks(request):
+    """
+    Assemble uploaded chunks into a complete video file.
+    
+    Expected request data (camelCase):
+    - videoId: ID of the video
+    - fileName: Original filename for the assembled video
+    """
+    try:
+        video_id = request.data.get('videoId')
+        filename = request.data.get('fileName')
+        
+        if not video_id or not filename:
+            return error_response({'error': 'Missing videoId or fileName'})
+        
+        # Verify video exists
+        try:
+            video = Video.objects.get(id=video_id)
+        except Video.DoesNotExist:
+            return error_response({'error': f'Video with id {video_id} not found'})
+        
+        chunk_dir = f"videos/chunks/{video_id}"
+        
+        # Get all chunk files sorted by index
+        chunk_files = []
+        chunk_index = 0
+        while True:
+            chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}")
+            if not default_storage.exists(chunk_path):
+                break
+            chunk_files.append(chunk_path)
+            chunk_index += 1
+        
+        if not chunk_files:
+            return error_response({'error': 'No chunks found for this video'})
+        
+        logger.info(f"Assembling {len(chunk_files)} chunks for video {video_id}")
+        
+        # Create final video path
+        final_video_path = f"videos/originals/{video_id}_{filename}"
+        
+        # Assemble chunks into final file
+        # Create a temporary buffer to hold assembled content
+        assembled_content = io.BytesIO()
+        
+        for chunk_path in chunk_files:
+            chunk_file = default_storage.open(chunk_path, 'rb')
+            assembled_content.write(chunk_file.read())
+            chunk_file.close()
+        
+        # Save assembled file
+        assembled_content.seek(0)
+        final_path = default_storage.save(final_video_path, ContentFile(assembled_content.read()))
+        
+        # Update video model with the assembled file path
+        video.video = final_path
+        video.save()
+        
+        # Clean up chunks
+        for chunk_path in chunk_files:
+            try:
+                default_storage.delete(chunk_path)
+            except Exception as e:
+                logger.warning(f"Could not delete chunk {chunk_path}: {str(e)}")
+        
+        # Try to remove chunk directory
+        try:
+            # Note: Some storage backends may not support directory deletion
+            if hasattr(default_storage, 'delete'):
+                default_storage.delete(chunk_dir)
+        except Exception as e:
+            logger.warning(f"Could not delete chunk directory {chunk_dir}: {str(e)}")
+        
+        logger.info(f"Successfully assembled video {video_id} at {final_path}")
+        
+        # Trigger HLS conversion
+        try:
+            task = convert_video_to_hls.delay(video.id)
+            logger.info(f"Queued HLS conversion task {task.id} for video {video.id}")
+            message = 'Video assembled successfully. HLS conversion in progress.'
+        except Exception as e:
+            logger.error(f"Could not queue video conversion task: {str(e)}", exc_info=True)
+            message = 'Video assembled successfully. Conversion will start when processing service is available.'
+        
+        return success_response({
+            'message': message,
+            'video_id': video.id,
+            'video_path': final_path,
+            'chunks_assembled': len(chunk_files)
+        })
+        
+    except Exception as e:
+        logger.error(f"Error assembling chunks: {str(e)}", exc_info=True)
+        return error_response({'error': str(e)})
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -148,7 +352,7 @@ def create_video(request):
     with multiple quality levels (1080p, 720p, 480p, 360p) for adaptive
     bitrate streaming based on client network speed.
     """
-    slug = request.data.get('title', None)
+    # slug = request.data.get('title', None)
     
     data = {
         'title': request.data.get('title'),
@@ -156,7 +360,7 @@ def create_video(request):
         'category': request.data.get('category'),
         'thumbnail': request.data.get('thumbnail'),
         'video': request.data.get('video'),
-        'slug': slug.replace(' ', '-').lower() if slug else None,
+        # 'slug': slug.replace(' ', '-').lower() if slug else None,
         'uploaded_by': request.user.id,
         'processing_status': 'pending'  # Initial status
     }
@@ -292,7 +496,7 @@ def stream_hls(request, video_slug, file_path):
         raise Http404("Error loading video file")
 
 @api_view(['GET'])
-def get_video_stream_url(request, pk):
+def get_video_stream_url(request, id):
     """
     Get the streaming URL for a video.
     
@@ -300,7 +504,7 @@ def get_video_stream_url(request, pk):
         Video details with HLS streaming URL from R2 storage
     """
     try:
-        video = Video.objects.get(pk=pk)
+        video = Video.objects.get(uid=id)
         
         if not video.is_ready_for_streaming:
             return error_response({
@@ -355,49 +559,58 @@ def get_all_videos(request):
 def get_video(request, pk):
     feed = Video.objects.get(pk=pk)
     serializer = VideoSerializer(feed)
-    return success_response(feed)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_video_comments(request, pk):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_video_related(request, video_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def like_video(request, video_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def dislike_video(request, video_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def like_comment(request, comment_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def dislike_comment(request, comment_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def comment(request, video_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def reply(request, comment_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)
 
 @api_view(['POST'])
 def view(request, video_id):
     feed = Category.objects.all()
-    return success_response(feed)
+    serializer = CategorySerializer(feed, many=True)
+    return success_response(serializer.data)

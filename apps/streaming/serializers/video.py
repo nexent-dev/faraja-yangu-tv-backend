@@ -21,3 +21,26 @@ class VideoSerializer(serializers.ModelSerializer):
             'streaming_url',
             'is_ready_for_streaming'
         ]
+
+
+class VideoLightSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for Video model with only essential fields.
+    Used for listing videos in categories or feeds.
+    """
+    class Meta:
+        model = Video
+        fields = [
+            'id',
+            'uid',
+            'created_at',
+            'updated_at',
+            'title',
+            'description',
+            'slug',
+            'thumbnail',
+            'duration',
+            'views_count',
+            'likes_count',
+            'dislikes_count'
+        ]

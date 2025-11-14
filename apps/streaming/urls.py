@@ -9,6 +9,7 @@ urlpatterns = [
     path('update-category/<int:pk>/', views.update_category, name='update-category'),
     path('categories/', views.get_categories, name='category-list'),
     path('categories/<int:pk>/', views.get_category, name='category-detail'),
+    path('categories/<int:pk>/videos/', views.get_category_videos, name='category-videos'),
     path('subcategories/<int:category_id>/', views.get_subcategories, name='subcategory-list'),
     path('subcategories/<int:pk>/', views.get_subcategory, name='subcategory-detail'),
     
@@ -27,6 +28,10 @@ urlpatterns = [
     path('update-video/<int:pk>/', views.update_video, name='update-video'),
     path('delete-video/<int:pk>/', views.delete_video, name='delete-video'),
     
+    # Chunked upload endpoints
+    path('upload-chunk/', views.upload_chunk, name='upload-chunk'),
+    path('assemble-chunks/', views.assemble_chunks, name='assemble-chunks'),
+    
     path('like-video/<int:video_id>/', views.like_video, name='like-video'),
     path('dislike-video/<int:video_id>/', views.dislike_video, name='dislike-video'),
     path('like-comment/<int:comment_id>/', views.like_comment, name='like-comment'),
@@ -36,6 +41,6 @@ urlpatterns = [
     path('view/<int:video_id>/', views.view, name='view'),
     
     # HLS Streaming endpoints
-    path('stream/<int:pk>/', views.get_video_stream_url, name='get-stream-url'),
+    path('stream/<str:id>/', views.get_video_stream_url, name='get-stream-url'),
     re_path(r'^hls/(?P<video_slug>[\w-]+)/(?P<file_path>.+)$', views.stream_hls, name='stream-hls'),
 ]

@@ -27,7 +27,7 @@ class Video(BaseModel):
     
     title = models.CharField(max_length=255)
     description = models.TextField()
-    slug = models.SlugField(unique=True)
+    slug = models.SlugField(unique=True, null=True, blank=True)
     thumbnail = models.ImageField(upload_to='videos', null=True, blank=True)
     category = models.ForeignKey(Category, related_name='videos', on_delete=models.CASCADE)
     
