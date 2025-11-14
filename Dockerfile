@@ -14,8 +14,10 @@ RUN apt-get update && \
     apt-get install -y libffi-dev && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && \
-    apt-get install -y nano nginx tzdata python3.12 python3.12-full python3.12-dev python3.12-distutils python3-pip && \
+    apt-get install -y nano nginx tzdata python3.12 python3.12-dev python3-pip && \
     rm -rf /var/lib/apt/lists/*
+
+RUN python3.12 -m ensurepip --upgrade
 
 # Configure the timezone non-interactively
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -34,7 +36,7 @@ RUN apt-get update && \
     apt-get install -y ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
-RUN python3.12 -m pip install --upgrade --ignore-installed pip setuptools==69.5.1 wheel && \
+RUN python3.12 -m pip install --upgrade --ignore-installed pip setuptools wheel && \
     python3.12 -m pip install --break-system-packages cffi && \
     python3.12 -m pip install --break-system-packages 'uvicorn[standard]' && \
     python3.12 -m pip install --break-system-packages -r requirements.txt && \
