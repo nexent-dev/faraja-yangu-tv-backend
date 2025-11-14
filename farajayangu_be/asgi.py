@@ -4,7 +4,6 @@ import logging
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from django.urls import path
-from .consumers import VideoConsumer
 
 django.setup()
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'farajayangu_be.settings.dev')
