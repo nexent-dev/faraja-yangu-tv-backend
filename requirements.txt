@@ -12,6 +12,7 @@ azure-identity==1.25.1
 azure-mgmt-communication==2.1.0
 azure-mgmt-core==1.6.0
 billiard==4.2.2
+boto3==1.40.69
 celery==5.5.3
 certifi==2025.10.5
 cffi==2.0.0
