@@ -54,14 +54,12 @@ lml==0.1.0
 msal==1.34.0
 msal-extensions==1.3.1
 msgpack==1.1.0
-# Editable Git install with no remote (ntc==1.0.0)
--e c:\users\user\documents\projects\ntc-cloud\scripts\ntc
 openai==1.63.2
 packaging==25.0
 pandas==2.0.3
 pillow==12.0.0
 prompt_toolkit==3.0.52
-psycopg2-binary==2.9.10
+psycopg2==2.9.10
 pyasn1==0.6.1
 pyasn1_modules==0.4.1
 pycparser==2.23
