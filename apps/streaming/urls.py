@@ -14,6 +14,9 @@ urlpatterns = [
     path('subcategories/<int:pk>/', views.get_subcategory, name='subcategory-detail'),
     
     path('feed/', views.get_feed, name='feed-list'),
+    path('history/', views.history_list, name='history-list'),
+    path('favorites/', views.favorites_list, name='favorites-list'),
+    path('downloads/', views.downloads_list, name='downloads-list'),
     path('get-recent-feed/', views.get_recent_feed, name='get-recent-feed-list'),
     path('search/', views.get_search, name='search-list'),
     path('get-banner-ads/', views.get_banner_ads, name='get-banner-ads-list'),
@@ -40,7 +43,29 @@ urlpatterns = [
     path('reply/<int:comment_id>/', views.reply, name='reply'),
     path('view/<int:video_id>/', views.view, name='view'),
     
+    # Video player related / interaction endpoints (additive)
+    path('stream/<str:video_uid>/related/', views.get_related_videos, name='stream-related'),
+    path('stream/<str:video_uid>/like/', views.video_like_stream, name='stream-like'),
+    path('stream/<str:video_uid>/dislike/', views.video_dislike_stream, name='stream-dislike'),
+    path('stream/<str:video_uid>/view/', views.record_view_stream, name='stream-view'),
+    path('stream/<str:video_uid>/share/', views.record_share_stream, name='stream-share'),
+    path('stream/<str:video_uid>/comments/', views.video_comments_stream, name='stream-comments'),
+    path('comments/<int:comment_id>/replies/', views.comment_replies_stream, name='comment-replies'),
+    path('comments/<int:comment_id>/like/', views.comment_like_stream, name='comment-like'),
+    path('comments/<int:comment_id>/', views.delete_comment_stream, name='comment-delete'),
+    
+    path('playlists/', views.playlist_list, name='playlist-list'),
+    path('playlists/create/', views.playlist_create, name='playlist-create'),
+    path('playlists/<str:playlist_uid>/', views.playlist_detail, name='playlist-detail'),
+    path('playlists/<str:playlist_uid>/videos/', views.playlist_add_video, name='playlist-add-video'),
+    path('playlists/<str:playlist_uid>/videos/<str:video_uid>/', views.playlist_remove_video, name='playlist-remove-video'),
+    path('playlists/<str:playlist_uid>/delete/', views.playlist_delete, name='playlist-delete'),
+    
     # HLS Streaming endpoints
     path('stream/<str:id>/', views.get_video_stream_url, name='get-stream-url'),
+    path('stream/<str:video_uid>/favorite/', views.favorite_video, name='favorite-video'),
+    path('stream/<str:video_uid>/unfavorite/', views.unfavorite_video, name='unfavorite-video'),
+    path('stream/<str:video_uid>/download/', views.mark_video_downloaded, name='download-video'),
+    path('stream/<str:video_uid>/undownload/', views.unmark_video_downloaded, name='undownload-video'),
     re_path(r'^hls/(?P<video_slug>[\w-]+)/(?P<file_path>.+)$', views.stream_hls, name='stream-hls'),
 ]

@@ -8,11 +8,17 @@ class Ad(BaseModel):
     class AD_TYPES(models.TextChoices):
         BANNER = 'BANNER'
         VIDEO = 'VIDEO'
+        CAROUSEL = 'CAROUSEL'
     
-    name = models.CharField(max_length=255)
-    description = models.TextField()
-    slug = models.SlugField(unique=True)
+    class AD_RENDER_TYPES(models.TextChoices):
+        CUSTOM = 'CUSTOM'
+        GOOGLE = 'GOOGLE'
+    
+    name = models.CharField(max_length=255, blank=True, null=True)
+    description = models.TextField(blank=True, null=True)
+    slug = models.SlugField(unique=True, null=True, blank=True)
     type = models.CharField(max_length=255, choices=AD_TYPES.choices, default=AD_TYPES.BANNER)
+    ad_render_type = models.CharField(max_length=255, choices=AD_RENDER_TYPES.choices, default=AD_RENDER_TYPES.CUSTOM)
     thumbnail = models.ImageField(upload_to='ads', null=True, blank=True)
     video = models.FileField(upload_to='ads', null=True, blank=True)
     duration = models.DurationField(null=True, blank=True)

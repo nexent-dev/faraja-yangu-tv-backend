@@ -111,3 +111,28 @@ class VideoAdSlot(BaseModel):
     
     def __str__(self):
         return f'{self.video} ad slot'
+
+
+class Playlist(BaseModel):
+    """User playlist model for grouping videos."""
+
+    owner = models.ForeignKey('authentication.User', related_name='playlists', on_delete=models.CASCADE)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    thumbnail = models.ImageField(upload_to='playlists', null=True, blank=True)
+
+    def __str__(self):
+        return f'{self.owner} - {self.name}'
+
+
+class PlaylistVideo(BaseModel):
+    """Through model for videos inside a playlist."""
+
+    playlist = models.ForeignKey(Playlist, related_name='playlist_videos', on_delete=models.CASCADE)
+    video = models.ForeignKey(Video, related_name='in_playlists', on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ('playlist', 'video')
+
+    def __str__(self):
+        return f'{self.playlist} -> {self.video}'

@@ -1,17 +1,30 @@
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from apps.streaming.serializers.video import VideoSerializer
+from apps.streaming.serializers.video import (
+    VideoFeedSerializer,
+    VideoSerializer,
+    VideoHistorySerializer,
+    FavoriteVideoSerializer,
+)
+from apps.streaming.serializers.playlist import (
+    PlaylistListSerializer,
+    PlaylistDetailSerializer,
+)
+from apps.advertising.models import Ad
 from core.response_wrapper import success_response, error_response
 from rest_framework.decorators import api_view
-from .models import Category, Video
+from .models import Category, Video, Playlist, PlaylistVideo, Comment
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.decorators import permission_classes
 from .serializers.category import CategorySerializer
+from .serializers.comment import CommentSerializer, ReplySerializer
 from .tasks import convert_video_to_hls
+from apps.authentication.models import Profile
 from django.http import HttpResponse, Http404, FileResponse
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 import logging
 import mimetypes
 import os
@@ -38,6 +51,7 @@ def inject_ad_markers(playlist_content: str, video_slug: str, ad_interval: int =
     current_duration = 0.0
     last_ad_time = 0.0
     ad_count = 0
+    first_segment_ad_inserted = False
     
     for line in lines:
         # Track segment duration
@@ -47,12 +61,19 @@ def inject_ad_markers(playlist_content: str, video_slug: str, ad_interval: int =
                 duration_str = line.split(':')[1].split(',')[0]
                 segment_duration = float(duration_str)
                 current_duration += segment_duration
-                
-                # Check if it's time for an ad break
+
+                # Ensure a pre-roll ad before the very first media segment
+                if not first_segment_ad_inserted:
+                    ad_count += 1
+                    new_lines.append('#EXT-X-CUE-OUT:DURATION=30')
+                    new_lines.append(f'#EXT-X-ASSET:CAID=ad-{ad_count}')
+                    logger.info(f"Injected pre-roll ad marker {ad_count} at start for {video_slug}")
+                    first_segment_ad_inserted = True
+
+                # Time-based ad breaks after every ad_interval seconds of content
                 if current_duration - last_ad_time >= ad_interval:
                     ad_count += 1
-                    # Insert ad markers before this segment
-                    new_lines.append(f'#EXT-X-CUE-OUT:DURATION=30')
+                    new_lines.append('#EXT-X-CUE-OUT:DURATION=30')
                     new_lines.append(f'#EXT-X-ASSET:CAID=ad-{ad_count}')
                     logger.info(f"Injected ad marker {ad_count} at {current_duration}s for {video_slug}")
                     last_ad_time = current_duration
@@ -138,9 +159,326 @@ def get_subcategory(request, pk):
 
 @api_view(['GET'])
 def get_feed(request):
-    feed = Category.objects.all()
-    serializer = CategorySerializer(feed, many=True)
-    return success_response(serializer.data)
+    """Return a paginated list of videos with category and parent category info."""
+    # Prefetch category and its parent to avoid N+1 queries
+    queryset = Video.objects.select_related('category', 'category__parent').all()
+
+    # Pagination params
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = int(request.GET.get('page_size', 20))
+    except (TypeError, ValueError):
+        page_size = 20
+
+    paginator = Paginator(queryset, page_size)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    serializer = VideoFeedSerializer(page_obj.object_list, many=True)
+
+    # Base results are videos
+    results = list(serializer.data)
+
+    # Inject at most one ad segment per page so feed is not full of ads
+    if results:
+        ad_segment = None
+
+        # Try to use a custom ad if available
+        custom_ad = Ad.objects.filter(is_published=True).first()
+        if custom_ad:
+            ad_segment = {
+                'segment_type': 'AD',
+                'ad_render_type': 'CUSTOM',  # frontend: render custom ad
+                'ad': {
+                    'id': custom_ad.id,
+                    'name': custom_ad.name,
+                    'slug': custom_ad.slug,
+                    'type': custom_ad.type,
+                    'thumbnail': custom_ad.thumbnail.url if custom_ad.thumbnail else None,
+                    'video': custom_ad.video.url if custom_ad.video else None,
+                    'duration': custom_ad.duration.total_seconds() if custom_ad.duration else None,
+                },
+            }
+        else:
+            # Fallback to google ad placeholder only
+            ad_segment = {
+                'segment_type': 'AD',
+                'ad_render_type': 'GOOGLE',  # frontend: render Google ad slot
+            }
+
+        # Place ad roughly in the middle of the page
+        if ad_segment:
+            insert_index = max(1, len(results) // 2)
+            results.insert(insert_index, ad_segment)
+
+    return success_response({
+        'results': results,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'total_items': paginator.count,
+            'total_pages': paginator.num_pages,
+            'has_next': page_obj.has_next(),
+            'has_previous': page_obj.has_previous(),
+        },
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def history_list(request):
+    """List videos in the authenticated user's watch history.
+
+    This simplified version uses Profile.videos_watched without per-item
+    timestamps, so `last_watched_at` is always null.
+    """
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return success_response({
+            'results': [],
+            'pagination': {
+                'page': 1,
+                'page_size': 20,
+                'has_next': False,
+                'total': 0,
+            },
+        })
+
+    queryset = (
+        profile.videos_watched
+        .select_related('category', 'category__parent')
+        .all()
+        .order_by('-created_at')
+    )
+
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = int(request.GET.get('page_size', 20))
+    except (TypeError, ValueError):
+        page_size = 20
+
+    paginator = Paginator(queryset, page_size)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    serializer = VideoHistorySerializer(page_obj.object_list, many=True)
+
+    return success_response({
+        'results': serializer.data,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'has_next': page_obj.has_next(),
+            'total': paginator.count,
+        },
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def favorites_list(request):
+    """List videos in the authenticated user's favorites.
+
+    Uses Profile.favorite_videos without per-item timestamps.
+    """
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return success_response({
+            'results': [],
+            'pagination': {
+                'page': 1,
+                'page_size': 20,
+                'has_next': False,
+                'total': 0,
+            },
+        })
+
+    queryset = profile.favorite_videos.select_related('category', 'category__parent').all()
+
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = int(request.GET.get('page_size', 20))
+    except (TypeError, ValueError):
+        page_size = 20
+
+    paginator = Paginator(queryset, page_size)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    serializer = FavoriteVideoSerializer(page_obj.object_list, many=True)
+
+    return success_response({
+        'results': serializer.data,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'has_next': page_obj.has_next(),
+            'total': paginator.count,
+        },
+    })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def downloads_list(request):
+    """List videos the authenticated user marked as downloaded.
+
+    Uses Profile.downloaded_videos; timestamp is not tracked in this version.
+    """
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return success_response({
+            'results': [],
+            'pagination': {
+                'page': 1,
+                'page_size': 20,
+                'has_next': False,
+                'total': 0,
+            },
+        })
+
+    queryset = profile.downloaded_videos.select_related('category', 'category__parent').all()
+
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = int(request.GET.get('page_size', 20))
+    except (TypeError, ValueError):
+        page_size = 20
+
+    paginator = Paginator(queryset, page_size)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.page(paginator.num_pages)
+
+    serializer = VideoHistorySerializer(page_obj.object_list, many=True)
+
+    return success_response({
+        'results': serializer.data,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'has_next': page_obj.has_next(),
+            'total': paginator.count,
+        },
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def favorite_video(request, video_uid):
+    """Mark a video as favorite for the current user."""
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return error_response({'message': 'Profile not found'})
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    profile.favorite_videos.add(video)
+    return success_response(data={}, message='Favorited')
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def unfavorite_video(request, video_uid):
+    """Remove a video from the current user's favorites."""
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return error_response({'message': 'Profile not found'})
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    profile.favorite_videos.remove(video)
+    return success_response(data={}, message='Unfavorited')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def mark_video_downloaded(request, video_uid):
+    """Mark a video as downloaded for the current user."""
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return error_response({'message': 'Profile not found'})
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    profile.downloaded_videos.add(video)
+    return success_response(data={}, message='Marked as downloaded')
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def unmark_video_downloaded(request, video_uid):
+    """Remove a video from the current user's downloads list."""
+
+    profile = getattr(request.user, "profile", None)
+    if not profile:
+        return error_response({'message': 'Profile not found'})
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    profile.downloaded_videos.remove(video)
+    return success_response(data={}, message='Removed from downloads')
 
 @api_view(['GET'])
 def get_recent_feed(request):
@@ -496,6 +834,7 @@ def stream_hls(request, video_slug, file_path):
         raise Http404("Error loading video file")
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_video_stream_url(request, id):
     """
     Get the streaming URL for a video.
@@ -511,22 +850,61 @@ def get_video_stream_url(request, id):
                 'message': 'Video is still processing',
                 'processing_status': video.processing_status
             })
-        
+
+        # If the user is authenticated, record a view and update watch history
+        user = getattr(request, 'user', None)
+        if user is not None and getattr(user, 'is_authenticated', False):
+            from apps.streaming.models import View
+
+            View.objects.create(video=video, user=user)
+            video.views_count = View.objects.filter(video=video).count()
+            video.save(update_fields=['views_count'])
+
+            # Optionally add to watch history like record_view_stream
+            profile = getattr(user, 'profile', None)
+            if profile:
+                profile.videos_watched.add(video)
+
         # Construct backend streaming URL for ad injection
         from django.conf import settings
         backend_url = getattr(settings, 'BACKEND_URL', 'https://backend.farajayangutv.co.tz')
-        
+
         # Use backend proxy URL to enable ad injection
         stream_url = f"{backend_url}/streaming/hls/{video.slug}/master.m3u8"
         
+        parent_category_name = None
+        category_name = None
+        if video.category is not None:
+            category_name = video.category.name
+            if video.category.parent is not None:
+                parent_category_name = video.category.parent.name
+
+        has_liked = False
+        has_disliked = False
+        user = getattr(request, 'user', None)
+        if user is not None and getattr(user, 'is_authenticated', False):
+            from apps.streaming.models import Like, Dislike
+            has_liked = Like.objects.filter(video=video, user=user).exists()
+            has_disliked = Dislike.objects.filter(video=video, user=user).exists()
+
         return success_response({
             'id': video.id,
+            'uid': str(video.uid),
             'title': video.title,
+            'description': video.description,
+            'thumbnail': video.thumbnail.url if video.thumbnail else None,
+            'duration': str(video.duration) if video.duration else None,
+            'views_count': video.views_count,
+            'likes_count': video.likes_count,
+            'dislikes_count': video.dislikes_count,
             'slug': video.slug,
+            'created_at': video.created_at,
+            'parent_category_name': parent_category_name,
+            'category_name': category_name,
+            'has_liked': has_liked,
+            'has_disliked': has_disliked,
             'stream_url': stream_url,
             'is_ready': video.is_ready_for_streaming,
-            'duration': str(video.duration) if video.duration else None,
-            'thumbnail': video.thumbnail.url if video.thumbnail else None,
         })
         
     except Video.DoesNotExist:
@@ -614,3 +992,488 @@ def view(request, video_id):
     feed = Category.objects.all()
     serializer = CategorySerializer(feed, many=True)
     return success_response(serializer.data)
+
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# /////////////////////////// VIDEO PLAYER: RELATED & INTERACTION ENDPOINTS ///////////////////////// #
+
+
+@api_view(['GET'])
+def get_related_videos(request, video_uid):
+    """Return related videos for a given video.
+
+    Initial simple implementation: videos from the same category, excluding
+    the current one, ordered by -created_at.
+    """
+
+    try:
+        video = Video.objects.select_related('category').get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    queryset = (
+        Video.objects
+        .select_related('category', 'category__parent')
+        .filter(category=video.category)
+        .exclude(id=video.id)
+        .order_by('-created_at')[:20]
+    )
+
+    serializer = VideoFeedSerializer(queryset, many=True)
+
+    return success_response({
+        'videos': serializer.data,
+        'has_more': False,
+    })
+
+
+def _like_video_stream(request, video_uid):
+    """Internal helper to like a video."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    from apps.streaming.models import Like
+
+    Like.objects.get_or_create(video=video, user=request.user)
+    video.likes_count = Like.objects.filter(video=video).count()
+    video.save(update_fields=['likes_count'])
+
+    return success_response(data={}, message='Liked')
+
+
+def _unlike_video_stream(request, video_uid):
+    """Internal helper to remove like from a video."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    from apps.streaming.models import Like
+
+    Like.objects.filter(video=video, user=request.user).delete()
+    video.likes_count = Like.objects.filter(video=video).count()
+    video.save(update_fields=['likes_count'])
+
+    return success_response(data={}, message='Like removed')
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def video_like_stream(request, video_uid):
+    """Combined like/unlike endpoint for `/stream/{video_uid}/like/`."""
+
+    if request.method == 'POST':
+        return _like_video_stream(request, video_uid)
+    return _unlike_video_stream(request, video_uid)
+
+
+def _dislike_video_stream(request, video_uid):
+    """Internal helper to dislike a video."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    from apps.streaming.models import Dislike
+
+    Dislike.objects.get_or_create(video=video, user=request.user)
+    video.dislikes_count = Dislike.objects.filter(video=video).count()
+    video.save(update_fields=['dislikes_count'])
+
+    return success_response(data={}, message='Disliked')
+
+
+def _undislike_video_stream(request, video_uid):
+    """Internal helper to remove dislike from a video."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    from apps.streaming.models import Dislike
+
+    Dislike.objects.filter(video=video, user=request.user).delete()
+    video.dislikes_count = Dislike.objects.filter(video=video).count()
+    video.save(update_fields=['dislikes_count'])
+
+    return success_response(data={}, message='Dislike removed')
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def video_dislike_stream(request, video_uid):
+    """Combined dislike/undislike endpoint for `/stream/{video_uid}/dislike/`."""
+
+    if request.method == 'POST':
+        return _dislike_video_stream(request, video_uid)
+    return _undislike_video_stream(request, video_uid)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def record_view_stream(request, video_uid):
+    """Record a view for a video."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    from apps.streaming.models import View
+
+    View.objects.create(video=video, user=request.user)
+    video.views_count = View.objects.filter(video=video).count()
+    video.save(update_fields=['views_count'])
+
+    # Optionally add to watch history
+    profile = getattr(request.user, 'profile', None)
+    if profile:
+        profile.videos_watched.add(video)
+
+    return success_response(data={}, message='View recorded')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def record_share_stream(request, video_uid):
+    """Record a share action for analytics (no extra payload)."""
+
+    # For now, we just acknowledge; you can add analytics model later.
+    try:
+        Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    return success_response(data={}, message='Share recorded')
+
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# /////////////////////////////////////// COMMENTS ENDPOINTS /////////////////////////////////////// #
+
+
+def _get_video_comments_payload(request, video_uid):
+    """Internal helper to get paginated comments payload for a video."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        per_page = int(request.GET.get('per_page', 4))
+    except (TypeError, ValueError):
+        per_page = 4
+
+    qs = Comment.objects.filter(video=video, reply_to__isnull=True).order_by('-created_at')
+    paginator = Paginator(qs, per_page)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    serializer = CommentSerializer(page_obj.object_list, many=True)
+
+    return success_response({
+        'comments': serializer.data,
+        'has_more': page_obj.has_next(),
+    })
+
+
+def _post_comment_payload(request, video_uid):
+    """Internal helper to create a comment and return response payload."""
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    content = request.data.get('content')
+    if not content:
+        return error_response({'message': 'content is required'})
+
+    comment = Comment.objects.create(
+        video=video,
+        user=request.user,
+        comment=content,
+    )
+
+    serializer = CommentSerializer(comment)
+    return success_response(serializer.data, message='Comment posted')
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def video_comments_stream(request, video_uid):
+    """Combined list/create endpoint for `/stream/{video_uid}/comments/`."""
+
+    if request.method == 'GET':
+        return _get_video_comments_payload(request, video_uid)
+    return _post_comment_payload(request, video_uid)
+
+
+def _get_comment_replies_payload(request, comment_id):
+    """Internal helper to get paginated replies payload for a comment."""
+
+    try:
+        comment = Comment.objects.get(id=comment_id)
+    except Comment.DoesNotExist:
+        return error_response({'message': 'Comment not found'})
+
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        per_page = int(request.GET.get('per_page', 10))
+    except (TypeError, ValueError):
+        per_page = 10
+
+    qs = Comment.objects.filter(reply_to=comment).order_by('created_at')
+    paginator = Paginator(qs, per_page)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    serializer = ReplySerializer(page_obj.object_list, many=True)
+
+    return success_response({
+        'replies': serializer.data,
+        'has_more': page_obj.has_next(),
+    })
+
+
+def _post_comment_reply_payload(request, comment_id):
+    """Internal helper to create a reply and return response payload."""
+
+    try:
+        parent = Comment.objects.get(id=comment_id)
+    except Comment.DoesNotExist:
+        return error_response({'message': 'Comment not found'})
+
+    content = request.data.get('content')
+    if not content:
+        return error_response({'message': 'content is required'})
+
+    reply = Comment.objects.create(
+        video=parent.video,
+        user=request.user,
+        comment=content,
+        reply_to=parent,
+    )
+
+    serializer = ReplySerializer(reply)
+    return success_response(serializer.data, message='Reply posted')
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def comment_replies_stream(request, comment_id):
+    """Combined list/create endpoint for `/comments/{comment_id}/replies/`."""
+
+    if request.method == 'GET':
+        return _get_comment_replies_payload(request, comment_id)
+    return _post_comment_reply_payload(request, comment_id)
+
+
+def _like_comment_stream(request, comment_id):
+    """Internal helper to like a comment (placeholder, no persistence)."""
+
+    try:
+        Comment.objects.get(id=comment_id)
+    except Comment.DoesNotExist:
+        return error_response({'message': 'Comment not found'})
+
+    return success_response(data={}, message='Comment liked')
+
+
+def _unlike_comment_stream(request, comment_id):
+    """Internal helper to unlike a comment (placeholder)."""
+
+    try:
+        Comment.objects.get(id=comment_id)
+    except Comment.DoesNotExist:
+        return error_response({'message': 'Comment not found'})
+
+    return success_response(data={}, message='Comment like removed')
+
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def comment_like_stream(request, comment_id):
+    """Combined like/unlike endpoint for `/comments/{comment_id}/like/`."""
+
+    if request.method == 'POST':
+        return _like_comment_stream(request, comment_id)
+    return _unlike_comment_stream(request, comment_id)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_comment_stream(request, comment_id):
+    """Delete a comment (or reply) by ID for the current user."""
+
+    try:
+        comment = Comment.objects.get(id=comment_id, user=request.user)
+    except Comment.DoesNotExist:
+        return error_response({'message': 'Comment not found'})
+
+    comment.delete()
+    return success_response(data={}, message='Comment deleted')
+
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# /////////////////////////////////////// PLAYLIST ENDPOINTS /////////////////////////////////////// #
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def playlist_list(request):
+    """List playlists for the authenticated user (paginated)."""
+
+    qs = Playlist.objects.filter(owner=request.user).order_by('-created_at')
+
+    try:
+        page = int(request.GET.get('page', 1))
+    except (TypeError, ValueError):
+        page = 1
+
+    try:
+        page_size = int(request.GET.get('page_size', 20))
+    except (TypeError, ValueError):
+        page_size = 20
+
+    paginator = Paginator(qs, page_size)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    serializer = PlaylistListSerializer(page_obj.object_list, many=True)
+
+    return success_response({
+        'results': serializer.data,
+        'pagination': {
+            'page': page,
+            'page_size': page_size,
+            'has_next': page_obj.has_next(),
+            'total': paginator.count,
+        },
+    })
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def playlist_create(request):
+    """Create a new playlist for the authenticated user."""
+
+    data = {
+        'name': request.data.get('name'),
+        'description': request.data.get('description', ''),
+        'thumbnail': request.data.get('thumbnail'),
+    }
+
+    playlist = Playlist(owner=request.user, **{k: v for k, v in data.items() if k != 'thumbnail'})
+
+    # Handle optional thumbnail separately (supports multipart or URL-like value)
+    if 'thumbnail' in request.FILES:
+        playlist.thumbnail = request.FILES['thumbnail']
+
+    playlist.save()
+
+    serializer = PlaylistListSerializer(playlist)
+    return success_response(serializer.data, message='Playlist created')
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def playlist_detail(request, playlist_uid):
+    """Get playlist details with videos for the authenticated user."""
+
+    try:
+        playlist = Playlist.objects.get(uid=playlist_uid, owner=request.user)
+    except Playlist.DoesNotExist:
+        return error_response({'message': 'Playlist not found'})
+
+    serializer = PlaylistDetailSerializer(playlist)
+    return success_response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def playlist_add_video(request, playlist_uid):
+    """Add a video to a playlist.
+
+    Expects JSON body: { "video_uid": "..." }
+    """
+
+    try:
+        playlist = Playlist.objects.get(uid=playlist_uid, owner=request.user)
+    except Playlist.DoesNotExist:
+        return error_response({'message': 'Playlist not found'})
+
+    video_uid = request.data.get('video_uid')
+    if not video_uid:
+        return error_response({'message': 'video_uid is required'})
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    PlaylistVideo.objects.get_or_create(playlist=playlist, video=video)
+    return success_response(data={}, message='Video added to playlist')
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def playlist_remove_video(request, playlist_uid, video_uid):
+    """Remove a video from a playlist."""
+
+    try:
+        playlist = Playlist.objects.get(uid=playlist_uid, owner=request.user)
+    except Playlist.DoesNotExist:
+        return error_response({'message': 'Playlist not found'})
+
+    try:
+        video = Video.objects.get(uid=video_uid)
+    except Video.DoesNotExist:
+        return error_response({'message': 'Video not found'})
+
+    PlaylistVideo.objects.filter(playlist=playlist, video=video).delete()
+    return success_response(data={}, message='Video removed from playlist')
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def playlist_delete(request, playlist_uid):
+    """Delete a playlist belonging to the authenticated user."""
+
+    try:
+        playlist = Playlist.objects.get(uid=playlist_uid, owner=request.user)
+    except Playlist.DoesNotExist:
+        return error_response({'message': 'Playlist not found'})
+
+    playlist.delete()
+    return success_response(data={}, message='Playlist deleted')

@@ -7,4 +7,5 @@ urlpatterns = [
     path('streaming/', include('apps.streaming.urls')),
     path('advertising/', include('apps.advertising.urls')),
     path('analytics/', include('apps.analytics.urls')),
+    path('profile/', include('apps.profile.urls')),
 ]

@@ -14,6 +14,10 @@ urlpatterns = [
     path('verify-user/<int:id>/', views.verify_user, name='verify-user'),
     path('verify-otp/', views.verify_otp, name='verify-otp'),
     path('send-otp/', views.send_otp, name='send-otp'),
+    path('verify-email/', views.verify_email, name='verify-email'),
+    path('request-verification/', views.request_verification, name='request-verification'),
+    path('verify-password-reset-otp/', views.verify_password_reset_otp, name='request-verification'),
+    path('reset-password/', views.reset_password, name='request-verification'),
     path('request-password-reset-with-email/', views.request_password_reset_with_email, name='request-password-reset-with-email'),
     path('request-password-reset-with-phone/', views.request_password_reset_with_phone, name='request-password-reset-with-phone'),
 ]

@@ -24,7 +24,28 @@ class Profile(BaseModel):
     birth_date = models.DateField(null=True, blank=True)
     preferences = models.JSONField(null=True, blank=True)
     credit_accumulation = models.IntegerField(default=0)
-    avatar = models.ImageField(upload_to='avatars', null=True, blank=True)    
+    avatar = models.ImageField(upload_to='avatars', null=True, blank=True)   
+    videos_watched = models.ManyToManyField('streaming.Video', related_name='watched_by', blank=True)
+    ads_viewed = models.ManyToManyField('advertising.Ad', related_name='viewed_by', blank=True)
+    ads_clicked = models.ManyToManyField('advertising.Ad', related_name='clicked_by', blank=True)
+    favorite_videos = models.ManyToManyField('streaming.Video', related_name='favorited_by', blank=True)
+    downloaded_videos = models.ManyToManyField('streaming.Video', related_name='downloaded_by', blank=True)
+    
+    @property
+    def videos_watched_count(self):
+        return self.videos_watched.count()
+    
+    @property
+    def ads_viewed_count(self):
+        return self.ads_viewed.count()
+    
+    @property
+    def ads_clicked_count(self):
+        return self.ads_clicked.count()
+    
+    @property
+    def favorite_videos_count(self):
+        return self.favorite_videos.count()
 
 class User(AbstractUser):
     

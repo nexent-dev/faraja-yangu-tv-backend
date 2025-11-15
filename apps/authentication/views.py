@@ -5,16 +5,20 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from apps.authentication.serializers.profile import ProfileSerializer
+from apps.authentication.tasks.main import send_password_reset_email, send_verification_email
 from core.response_wrapper import success_response, error_response
 from rest_framework.decorators import api_view
 from rest_framework.decorators import permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from apps.authentication.models import OTP, User
+from apps.authentication.models import OTP, User, Profile
 from apps.authentication.serializers.user import UserSerializer
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 # Create your views here.
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -68,6 +72,9 @@ def login(request):
 
     return response
 
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def complete_profile(request):
@@ -90,6 +97,9 @@ def complete_profile(request):
     
     return success_response(data={}, message='Profile completed successfully')
 
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def profile(request):
@@ -108,6 +118,9 @@ def profile(request):
         'roles': user.roles.all(),
         'profile': ProfileSerializer(user.profile).data,
     })
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -138,6 +151,9 @@ def send_otp(request):
     
     return success_response(data={}, message='OTP sent successfully')
 
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def verify_phone(request):
@@ -159,11 +175,74 @@ def verify_phone(request):
     user.profile.save()
     
     return success_response(data={})
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_email(request):
+    
+    otp = request.data.get('otp', None)
+    email = request.data.get('email', None)
+    
+    if not email:
+        return error_response(message='Email is required')
+    
+    if not otp:
+        return error_response(message='OTP is required')
+    
+    user: (User, None) = User.objects.filter(email=email).first()
+    
+    if not user:
+        return error_response(message='User not found')
+    
+    otp: OTP = OTP.objects.filter(user=user, otp=otp).first()
+    
+    if not otp:
+        return error_response(message='Invalid OTP')
+    
+    if otp.expires_at > timezone.now():
+        otp.delete()
+        return error_response(message='OTP expired')
+    
+    user.is_verified = True
+    user.save()
+    otp.delete()
+    
+    return success_response(data={})
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login_with_google(request):
     return success_response(data={})
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_verification(request):
+    email = request.data.get('email')
+    
+    if not email:
+        return error_response(message="Email is required", code=400)
+    
+    user = User.objects.filter(email=email).first()
+    
+    if not user:
+        return error_response(message="There's an issue with your email make sure it's correct", code=400)
+    
+    if settings.DEBUG:
+        send_verification_email(user.id)
+    else:
+        send_verification_email.delay(user.id)
+    
+    return success_response(data={}, message="An OTP has been sent to your email")
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -194,11 +273,21 @@ def register(request):
         return error_response(message=serializer.errors)
     
     user: User = serializer.save()
-    
+
+    # Set password securely
     user.set_password(password)
     user.save()
-    
+
+    # Ensure a profile is created and linked to this user
+    if not user.profile:
+        profile = Profile.objects.create()
+        user.profile = profile
+        user.save()
+
     return success_response(data={})
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -209,6 +298,9 @@ def verify_user(request, id):
     user.save()
     
     return success_response(data={}, message='User verified successfully')
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -227,6 +319,9 @@ def verify_otp(request):
     otp.delete()
     
     return success_response(data={}, message='OTP verified successfully')
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
@@ -259,6 +354,9 @@ def refresh(request):
     
     return response
 
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def logout(request):
@@ -282,12 +380,115 @@ def logout(request):
     
     return response
 
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def request_password_reset_with_email(request):
+    
+    email = request.data.get('email')
+    
+    if not email:
+        return error_response(code=400, message="Email is required")
+    
+    user: (User, None) = User.objects.filter(email=email).first()
+    
+    if not user:
+        return error_response(code=400, message="There's an issue with your email")
+    
+    if settings.DEBUG:
+        send_password_reset_email(user.id)
+    else:
+        send_password_reset_email.delay(user.id)
+    
     return success_response(data={})
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def request_password_reset_with_phone(request):
     return success_response(data={})
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_password_reset_otp(request):
+    
+    otp_code = request.data.get('otp', None)
+    email = request.data.get('email', None)
+    
+    user: (User, None) = User.objects.filter(email=email).first()
+    
+    otp = OTP.objects.filter(otp=otp_code, user=user).first()
+        
+    if not otp:
+        return error_response(message='Invalid OTP')
+    
+    if otp.expires_at > timezone.now():
+        otp.delete()
+        return error_response(message='OTP expired')
+    
+    return success_response(data={}, message='OTP verified successfully')
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password(request):
+    
+    otp_code = request.data.get('otp', None)
+    email = request.data.get('email', None)
+    password = request.data.get('password', None)
+    password_confirmation = request.data.get('password_confirmation', None)
+    
+    # Validate required fields
+    if not email:
+        return error_response(message='Email is required')
+    
+    if not otp_code:
+        return error_response(message='OTP is required')
+    
+    if not password:
+        return error_response(message='Password is required')
+    
+    if not password_confirmation:
+        return error_response(message='Password confirmation is required')
+    
+    # Check if passwords match
+    if password != password_confirmation:
+        return error_response(message='Passwords do not match')
+    
+    # Validate password strength (optional but recommended)
+    if len(password) < 8:
+        return error_response(message='Password must be at least 8 characters long')
+    
+    # Find user
+    user: (User, None) = User.objects.filter(email=email).first()
+    
+    if not user:
+        return error_response(message='User not found')
+    
+    # Verify OTP
+    otp = OTP.objects.filter(otp=otp_code, user=user).first()
+        
+    if not otp:
+        return error_response(message='Invalid OTP')
+    
+    if otp.expires_at > timezone.now():
+        otp.delete()
+        return error_response(message='OTP expired')
+    
+    # Reset password
+    user.set_password(password)
+    user.save()
+    
+    # Delete OTP after successful password reset
+    otp.delete()
+    
+    return success_response(data={}, message='Password reset successfully')

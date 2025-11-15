@@ -1,0 +1,1 @@
+from apps.advertising.serializers.ads import AdSerializer

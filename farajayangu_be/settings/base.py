@@ -17,7 +17,7 @@ DEBUG = env.bool('DEBUG', default=True)
 SECRET_KEY = env('SECRET_KEY', default='your-secret-key')
 REFRESH_TOKEN_SECRET = env('SECRET_KEY', default='your-secret-key')
 BASE_URL = env('BASE_URL', default='http://127.0.0.1:8000')
-BACKEND_URL = env('BACKEND_URL', default='https://backend.farajayangutv.co.tz')
+BACKEND_URL = env('BACKEND_URL', default=BASE_URL)
 
 DATABASE_ENGINE = env('DATABASE_ENGINE', default='django.db.backends.sqlite3')
 DATABASE_NAME = env('DATABASE_NAME', default='db.sqlite3')
@@ -50,6 +50,10 @@ AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME")
 AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL")
 AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="auto")
 AWS_DEFAULT_ACL = None  # Cloudflare ignores this, but keeps it clean
+
+AZURE_EMAIL_ENDPOINT = env("AZURE_EMAIL_ENDPOINT")
+AZURE_EMAIL_KEY = env("AZURE_EMAIL_KEY")
+NO_REPLY_SENDER_EMAIL = env("NO_REPLY_SENDER_EMAIL")
 
 ALLOWED_HOSTS = ['*']
 
@@ -123,6 +127,7 @@ INSTALLED_APPS = [
     'apps.streaming',
     'apps.advertising',
     'apps.analytics',
+    'apps.profile',
 ]
 
 MIDDLEWARE = [
