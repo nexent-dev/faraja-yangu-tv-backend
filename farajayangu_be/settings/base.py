@@ -55,13 +55,19 @@ AZURE_EMAIL_ENDPOINT = env("AZURE_EMAIL_ENDPOINT")
 AZURE_EMAIL_KEY = env("AZURE_EMAIL_KEY")
 NO_REPLY_SENDER_EMAIL = env("NO_REPLY_SENDER_EMAIL")
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['*'] if DEBUG else (
+    "https://cms.farajayangutv.co.tz",
+    "https://farajayangutv.co.tz",
+)
 
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOW_CREDENTIALS = True
 CORS_ORIGIN_WHITELIST = (
     'http://127.0.0.1:5713',
     'http://127.0.0.1:8000',
+) if DEBUG else (
+    "https://cms.farajayangutv.co.tz",
+    "https://farajayangutv.co.tz",
 )
 
 AUTH_USER_MODEL = 'authentication.User'
