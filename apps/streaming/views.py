@@ -161,7 +161,7 @@ def get_subcategory(request, pk):
 def get_feed(request):
     """Return a paginated list of videos with category and parent category info."""
     # Prefetch category and its parent to avoid N+1 queries
-    queryset = Video.objects.select_related('category', 'category__parent').all()
+    queryset = Video.objects.select_related('category', 'category__parent').all().order_by('-created_at')
 
     # Pagination params
     try:
