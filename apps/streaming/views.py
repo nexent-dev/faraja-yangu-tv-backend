@@ -698,6 +698,7 @@ def create_video(request):
         'category': request.data.get('category'),
         'thumbnail': request.data.get('thumbnail'),
         'video': request.data.get('video'),
+        'is_published': request.data.get('status', 'draft') == 'published',
         # 'slug': slug.replace(' ', '-').lower() if slug else None,
         'uploaded_by': request.user.id,
         'processing_status': 'pending'  # Initial status
