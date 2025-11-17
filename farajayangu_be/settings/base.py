@@ -290,6 +290,10 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
+# File Upload Settings
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5368709120  # 5GB in bytes
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5368709120  # 5GB in bytes
+
 # HLS Video Streaming Configuration
 HLS_SEGMENT_DURATION = 6  # seconds per segment
 HLS_OUTPUT_DIR = 'videos/hls'  # Base directory for HLS files
