@@ -38,13 +38,14 @@ RUN python3.12 -m pip install --break-system-packages 'uvicorn[standard]' && \
     python3.12 -m pip install --break-system-packages -r requirements.txt && \
     python3.12 -m pip install --break-system-packages psycopg2-binary==2.9.10
 
+# Install Sentry SDK
+RUN python3.12 -m pip install --break-system-packages "sentry-sdk[django]"
+
 # Add xiron to Python path
 ENV PYTHONPATH="/app:${PYTHONPATH}"
 
 # Copy application code (after dependencies are installed)
 COPY . /app
-
-RUN python3.12 -m pip install --break-system-packages "sentry-sdk[django]"
 
 # NGINX configuration files
 COPY .config/default.conf /etc/nginx/conf.d/default.conf
