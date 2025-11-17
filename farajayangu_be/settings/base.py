@@ -55,10 +55,11 @@ AZURE_EMAIL_ENDPOINT = env("AZURE_EMAIL_ENDPOINT")
 AZURE_EMAIL_KEY = env("AZURE_EMAIL_KEY")
 NO_REPLY_SENDER_EMAIL = env("NO_REPLY_SENDER_EMAIL")
 
-ALLOWED_HOSTS = ['*'] if DEBUG else (
-    "https://cms.farajayangutv.co.tz",
-    "https://farajayangutv.co.tz",
-)
+ALLOWED_HOSTS = ['*'] if DEBUG else [
+    "cms.farajayangutv.co.tz",
+    "farajayangutv.co.tz",
+    "backend.farajayangutv.co.tz",
+]
 
 CORS_ORIGIN_ALLOW_ALL = DEBUG
 CORS_ALLOW_CREDENTIALS = True
@@ -70,6 +71,15 @@ CORS_ORIGIN_WHITELIST = (
     "https://cms.farajayangutv.co.tz",
     "https://farajayangutv.co.tz",
 )
+
+CSRF_TRUSTED_ORIGINS = [
+    'http://127.0.0.1:5713',
+    'http://127.0.0.1:8000',
+] if DEBUG else [
+    "https://backend.farajayangutv.co.tz",
+    "https://cms.farajayangutv.co.tz",
+    "https://farajayangutv.co.tz",
+]
 
 AUTH_USER_MODEL = 'authentication.User'
 
@@ -138,13 +148,13 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = 'farajayangu_be.urls'
