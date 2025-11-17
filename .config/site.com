@@ -1,6 +1,6 @@
 server {
     listen 80;
-    server_name farajayangutv.co.tz;
+    server_name cms.farajayangutv.co.tz farajayangutv.co.tz backend.farajayangutv.co.tz;
 
     location /media/ {
         # proxy_pass http://0.0.0.0:8000/media/;
