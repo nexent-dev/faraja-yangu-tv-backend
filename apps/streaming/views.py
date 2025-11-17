@@ -912,7 +912,11 @@ def get_video_stream_url(request, id):
 @permission_classes([IsAuthenticated])
 def update_video(request, pk):
     video = Video.objects.get(pk=pk)
-    serializer = VideoSerializer(video, data=request.data)
+    uploaded_by = video.uploaded_by.id
+    data = { key: value for key, value in request.data.items() }
+    data['uploaded_by'] = uploaded_by
+    data['is_published'] = request.data.get('status', 'draft') == 'published'
+    serializer = VideoSerializer(video, data=data)
     if serializer.is_valid():
         serializer.save()
         return success_response(serializer.data)
