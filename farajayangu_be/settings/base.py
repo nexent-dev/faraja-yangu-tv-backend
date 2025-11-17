@@ -59,6 +59,7 @@ ALLOWED_HOSTS = ['*'] if DEBUG else [
     "cms.farajayangutv.co.tz",
     "farajayangutv.co.tz",
     "backend.farajayangutv.co.tz",
+    "*",  # Temporary - remove after confirming the exact host
 ]
 
 CORS_ORIGIN_ALLOW_ALL = DEBUG
