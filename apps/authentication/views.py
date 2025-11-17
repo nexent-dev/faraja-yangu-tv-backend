@@ -54,7 +54,7 @@ def login(request):
                 'email': user.email,
                 'first_name': user.first_name,
                 'last_name': user.last_name,
-                'roles': user.roles.all(),
+                'roles': user.roles.all().values(),
             }
         },
         message='Login successful'
@@ -115,7 +115,7 @@ def profile(request):
         'email': user.email,
         'first_name': user.first_name,
         'last_name': user.last_name,
-        'roles': user.roles.all(),
+        'roles': user.roles.all().values(),
         'profile': ProfileSerializer(user.profile).data,
     })
 
