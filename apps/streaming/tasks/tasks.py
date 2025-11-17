@@ -48,7 +48,7 @@ def convert_video_to_hls(self, video_id: int):
         logger.info(f"Video downloaded to: {video_file_path}")
         
         # Define output directory for HLS files (use temp directory, NOT server storage)
-        hls_output_dir = f"videos/hls/{video.slug}"  # Remote path in R2
+        hls_output_dir = f"videos/hls/{video.uid}"  # Remote path in R2
         import tempfile
         local_hls_dir = os.path.join(tempfile.gettempdir(), f"hls_{video_id}")  # Local temp only
         
