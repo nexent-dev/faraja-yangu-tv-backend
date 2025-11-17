@@ -16,7 +16,7 @@ boto3==1.40.69
 celery==5.5.3
 certifi==2025.10.5
 cffi==2.0.0
-channels==4.2.0
+channels==4.3.1
 daphne==4.1.2
 chardet==5.2.0
 charset-normalizer==3.4.4

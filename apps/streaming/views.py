@@ -710,7 +710,7 @@ def create_video(request):
         
         # Trigger async HLS conversion task
         try:
-            task = convert_video_to_hls.delay(video.id)
+            # task = convert_video_to_hls.delay(video.id)
             logger.info(f"Queued HLS conversion task {task.id} for video {video.id}")
             message = 'Video uploaded successfully. HLS conversion in progress.'
         except Exception as e:

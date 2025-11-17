@@ -44,6 +44,8 @@ ENV PYTHONPATH="/app:${PYTHONPATH}"
 # Copy application code (after dependencies are installed)
 COPY . /app
 
+RUN python3.12 -m pip install --break-system-packages "sentry-sdk[django]"
+
 # NGINX configuration files
 COPY .config/default.conf /etc/nginx/conf.d/default.conf
 COPY .config/site.com /etc/nginx/sites-available/default

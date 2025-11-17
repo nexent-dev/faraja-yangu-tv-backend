@@ -3,6 +3,8 @@ import environ
 from datetime import timedelta
 import pytz
 import os
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -54,6 +56,8 @@ AWS_DEFAULT_ACL = None  # Cloudflare ignores this, but keeps it clean
 AZURE_EMAIL_ENDPOINT = env("AZURE_EMAIL_ENDPOINT")
 AZURE_EMAIL_KEY = env("AZURE_EMAIL_KEY")
 NO_REPLY_SENDER_EMAIL = env("NO_REPLY_SENDER_EMAIL")
+
+SENTRY_DSN = env("SENTRY_DSN")
 
 ALLOWED_HOSTS = ['*'] if DEBUG else [
     "cms.farajayangutv.co.tz",
@@ -146,6 +150,7 @@ INSTALLED_APPS = [
     'apps.advertising',
     'apps.analytics',
     'apps.profile',
+    'apps.management',
 ]
 
 MIDDLEWARE = [
@@ -313,11 +318,15 @@ CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes max for video processing
 
-# print(DEFAULT_FILE_STORAGE)
+sentry_sdk.init(
+    dsn=SENTRY_DSN,
+    send_default_pii=True,
+    # Set environment based on DEBUG flag
+    environment='development' if DEBUG else 'production',
+)
 
 if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     SECURE_SSL_REDIRECT = True
-    # if not DEBUG:
     
