@@ -11,13 +11,14 @@ urlpatterns = [
     path('categories/<int:pk>/', views.get_category, name='category-detail'),
     path('categories/<int:pk>/videos/', views.get_category_videos, name='category-videos'),
     path('subcategories/<int:category_id>/', views.get_subcategories, name='subcategory-list'),
-    path('subcategories/<int:pk>/', views.get_subcategory, name='subcategory-detail'),
+    # path('subcategories/<int:pk>/', views.get_subcategory, name='subcategory-detail'),
     
     path('feed/', views.get_feed, name='feed-list'),
     path('history/', views.history_list, name='history-list'),
     path('favorites/', views.favorites_list, name='favorites-list'),
     path('downloads/', views.downloads_list, name='downloads-list'),
     path('get-recent-feed/', views.get_recent_feed, name='get-recent-feed-list'),
+    path('q/', views.search_videos, name='search-videos'),
     path('search/', views.get_search, name='search-list'),
     path('get-banner-ads/', views.get_banner_ads, name='get-banner-ads-list'),
     
@@ -50,6 +51,7 @@ urlpatterns = [
     path('stream/<str:video_uid>/view/', views.record_view_stream, name='stream-view'),
     path('stream/<str:video_uid>/share/', views.record_share_stream, name='stream-share'),
     path('stream/<str:video_uid>/comments/', views.video_comments_stream, name='stream-comments'),
+    path('stream/<str:video_uid>/interceptor-ads/', views.interceptor_ads, name='stream-interceptor-ads'),
     path('comments/<int:comment_id>/replies/', views.comment_replies_stream, name='comment-replies'),
     path('comments/<int:comment_id>/like/', views.comment_like_stream, name='comment-like'),
     path('comments/<int:comment_id>/', views.delete_comment_stream, name='comment-delete'),
@@ -62,7 +64,7 @@ urlpatterns = [
     path('playlists/<str:playlist_uid>/delete/', views.playlist_delete, name='playlist-delete'),
     
     # HLS Streaming endpoints
-    path('stream/<str:id>/', views.get_video_stream_url, name='get-stream-url'),
+    path('stream/<str:uid>/', views.get_video_stream_url, name='get-stream-url'),
     path('stream/<str:video_uid>/favorite/', views.favorite_video, name='favorite-video'),
     path('stream/<str:video_uid>/unfavorite/', views.unfavorite_video, name='unfavorite-video'),
     path('stream/<str:video_uid>/download/', views.mark_video_downloaded, name='download-video'),

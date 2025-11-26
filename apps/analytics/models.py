@@ -33,10 +33,18 @@ class Report(BaseModel):
         return f'{self.user} report {self.analytics}'
 
 class Notification(BaseModel):
+    class NOTIFICATION_TYPES(models.TextChoices):
+        VIDEO = 'VIDEO', 'VIDEO'
+        SYSTEM = 'SYSTEM', 'SYSTEM'
+        PROMO = 'PROMO', 'PROMO'
+
     user = models.ForeignKey('authentication.User', related_name='notifications', on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
     message = models.TextField()
+    type = models.CharField(max_length=50, choices=NOTIFICATION_TYPES.choices, default=NOTIFICATION_TYPES.SYSTEM)
     is_read = models.BooleanField(default=False)
-    
+    target_video_slug = models.SlugField(null=True, blank=True)
+    target_url = models.URLField(null=True, blank=True)
+
     def __str__(self):
         return f'{self.user} notification'

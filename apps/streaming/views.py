@@ -14,7 +14,8 @@ from apps.streaming.serializers.playlist import (
 from apps.advertising.models import Ad
 from core.response_wrapper import success_response, error_response
 from rest_framework.decorators import api_view
-from .models import Category, Video, Playlist, PlaylistVideo, Comment
+from .models import Category, Video, Playlist, PlaylistVideo, Comment, VideoAdSlot
+from apps.streaming.models import Like, Dislike
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework.decorators import permission_classes
 from .serializers.category import CategorySerializer
@@ -25,11 +26,14 @@ from django.http import HttpResponse, Http404, FileResponse
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+from django.db.models import Exists, OuterRef, F, Value, Case, When, BooleanField, CharField, Q
+from django.db.models.functions import Concat, Cast
 import logging
 import mimetypes
 import os
 import hashlib
 import io
+from django.shortcuts import get_object_or_404
 
 logger = logging.getLogger(__name__)
 
@@ -136,24 +140,29 @@ def get_category(request, pk):
         parents=parents
     )
     
+    print(serializer.data)
+    
     return success_response(serializer.data)
+
 
 @api_view(['GET'])
 def get_category_videos(request, pk):
     category = Category.objects.get(pk=pk)
+    category = category.parent if category.parent is not None else category
     videos = Video.objects.filter(category=category)
     serializer = VideoSerializer(videos, many=True)
     return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_subcategories(request, category_id):
-    subcategories = Category.objects.filter(parent_id=category_id)
+    subcategories = Category.objects.filter(~Q(parent=None), parent=category_id)
     serializer = CategorySerializer(subcategories, many=True)
+    print(subcategories.values("id", "name"))
     return success_response(serializer.data)
 
 @api_view(['GET'])
 def get_subcategory(request, pk):
-    subcategory = Category.objects.get(pk=pk)
+    subcategory = Category.objects.get(parent=pk)
     serializer = CategorySerializer(subcategory)
     return success_response(serializer.data)
 
@@ -486,11 +495,73 @@ def get_recent_feed(request):
     serializer = CategorySerializer(feed, many=True)
     return success_response(serializer.data)
 
+
 @api_view(['GET'])
 def get_search(request):
     feed = Category.objects.all()
     serializer = CategorySerializer(feed, many=True)
     return success_response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def search_videos(request):
+    query = request.GET.get('search')
+    page_param = request.GET.get('page')
+    count_param = request.GET.get('count')
+
+    if not query or not page_param or not count_param:
+        return error_response('Invalid query parameters', code=400)
+
+    try:
+        page = int(page_param)
+        count = int(count_param)
+        if page < 1 or count < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        return error_response('Invalid query parameters', code=400)
+
+    queryset = (
+        Video.objects
+        .filter(is_published=True, processing_status='completed')
+        .select_related('category', 'category__parent')
+        .filter(
+            Q(title__icontains=query)
+            | Q(description__icontains=query)
+            | Q(slug__icontains=query)
+        )
+        .order_by('-created_at')
+    )
+
+    paginator = Paginator(queryset, count)
+
+    try:
+        page_obj = paginator.page(page)
+    except PageNotAnInteger:
+        page = 1
+        page_obj = paginator.page(page)
+    except EmptyPage:
+        page_obj = []
+
+    if page_obj:
+        objects = getattr(page_obj, 'object_list', page_obj)
+        serializer = VideoFeedSerializer(objects, many=True)
+        results = serializer.data
+        has_next = getattr(page_obj, 'has_next', lambda: False)()
+    else:
+        results = []
+        has_next = False
+
+    return success_response({
+        'results': results,
+        'pagination': {
+            'page': page,
+            'count': count,
+            'has_next': has_next,
+            'total': paginator.count,
+        },
+    }, message='Search results loaded successfully.')
+
 
 @api_view(['GET'])
 def get_videos(request, category_id):
@@ -834,7 +905,7 @@ def stream_hls(request, video_slug, file_path):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def get_video_stream_url(request, id):
+def get_video_stream_url(request, uid):
     """
     Get the streaming URL for a video.
     
@@ -842,7 +913,7 @@ def get_video_stream_url(request, id):
         Video details with HLS streaming URL from R2 storage
     """
     try:
-        video = Video.objects.get(uid=id)
+        video = Video.objects.get(uid=uid)
         
         if not video.is_ready_for_streaming:
             return error_response({
@@ -869,7 +940,7 @@ def get_video_stream_url(request, id):
         backend_url = getattr(settings, 'BACKEND_URL', 'https://backend.farajayangutv.co.tz')
 
         # Use backend proxy URL to enable ad injection
-        stream_url = f"{backend_url}/streaming/hls/{video.slug}/master.m3u8"
+        stream_url = f"{backend_url}/streaming/hls/{video.uid}/master.m3u8"
         
         parent_category_name = None
         category_name = None
@@ -882,15 +953,17 @@ def get_video_stream_url(request, id):
         has_disliked = False
         user = getattr(request, 'user', None)
         if user is not None and getattr(user, 'is_authenticated', False):
-            from apps.streaming.models import Like, Dislike
             has_liked = Like.objects.filter(video=video, user=user).exists()
             has_disliked = Dislike.objects.filter(video=video, user=user).exists()
 
+        print(video.thumbnail.url if video.thumbnail else None)
+        
         return success_response({
             'id': video.id,
             'uid': str(video.uid),
             'title': video.title,
             'description': video.description,
+            # Thumbnail URL comes directly from object storage backend
             'thumbnail': video.thumbnail.url if video.thumbnail else None,
             'duration': str(video.duration) if video.duration else None,
             'views_count': video.views_count,
@@ -1002,11 +1075,78 @@ def view(request, video_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def interceptor_ads(request, video_uid):
+    """Return an interceptor ad for the given video uid.
+
+    Outer contract:
+        {"data": { ... } | null}
+
+    - 404 if video_uid does not exist
+    - data == null if there is no ad to show
+    """
+
+    # Ensure video exists
+    video = get_object_or_404(Video, uid=video_uid)
+
+    # Optional future-proof position hint ("pre" | "mid" | "post")
+    position = request.GET.get('position')  # noqa: F841  # currently unused
+
+    # Select first published ad slot for this video for now
+    slot = (
+        VideoAdSlot.objects
+        .select_related('ad')
+        .filter(video=video, ad__is_published=True)
+        .order_by('start_time')
+        .first()
+    )
+
+    if not slot or not slot.ad:
+        return success_response(None)
+
+    ad = slot.ad
+
+    # Determine media type and asset URLs
+    if ad.type == Ad.AD_TYPES.VIDEO and ad.video:
+        media_type = "VIDEO"
+        video_url = ad.video.url
+        image_url = None
+    else:
+        media_type = "IMAGE"
+        image_url = ad.thumbnail.url if ad.thumbnail else None
+        video_url = None
+
+    # Duration in seconds; fall back to default if missing
+    if ad.duration:
+        total_seconds = int(ad.duration.total_seconds())
+    else:
+        total_seconds = 15
+
+    skippable_after = min(10, total_seconds)
+
+    payload = {
+        "id": ad.id,
+        "media_type": media_type,
+        "image_url": image_url,
+        "video_url": video_url,
+        "click_url": None,
+        "duration": total_seconds,
+        "skippable_after": skippable_after,
+        "label": "Sponsored",
+        "tracking": {
+            "impression_url": None,
+            "click_url": None,
+        },
+    }
+
+    return success_response(payload)
+
+
+@api_view(['GET'])
 def get_related_videos(request, video_uid):
     """Return related videos for a given video.
 
-    Initial simple implementation: videos from the same category, excluding
-    the current one, ordered by -created_at.
+    Uses the same payload structure as get_video_stream_url for each video.
     """
 
     try:
@@ -1014,7 +1154,7 @@ def get_related_videos(request, video_uid):
     except Video.DoesNotExist:
         return error_response({'message': 'Video not found'})
 
-    queryset = (
+    base_qs = (
         Video.objects
         .select_related('category', 'category__parent')
         .filter(category=video.category)
@@ -1022,10 +1162,77 @@ def get_related_videos(request, video_uid):
         .order_by('-created_at')[:20]
     )
 
-    serializer = VideoFeedSerializer(queryset, many=True)
+    from django.conf import settings
+
+    backend_url = getattr(settings, 'BACKEND_URL', 'https://backend.farajayangutv.co.tz')
+    user = getattr(request, 'user', None)
+
+    # Annotate category names
+    qs = base_qs.annotate(
+        parent_category_name=F('category__parent__name'),
+        category_name=F('category__name'),
+    )
+
+    # Annotate like/dislike flags based on current user
+    if user is not None and getattr(user, 'is_authenticated', False):
+        qs = qs.annotate(
+            has_liked=Exists(Like.objects.filter(video=OuterRef('pk'), user=user)),
+            has_disliked=Exists(Dislike.objects.filter(video=OuterRef('pk'), user=user)),
+        )
+    else:
+        qs = qs.annotate(
+            has_liked=Value(False),
+            has_disliked=Value(False),
+        )
+
+    # is_ready equivalent of is_ready_for_streaming property
+    qs = qs.annotate(
+        is_ready=Case(
+            When(
+                processing_status='completed',
+                hls_master_playlist__isnull=False,
+                then=Value(True),
+            ),
+            default=Value(False),
+            output_field=BooleanField(),
+        ),
+    )
+
+    # Annotate stream_url using BACKEND_URL and uid (cast UUID to string)
+    qs = qs.annotate(
+        stream_url=Concat(
+            Value(backend_url + '/streaming/hls/'),
+            Cast('uid', output_field=CharField()),
+            Value('/master.m3u8'),
+            output_field=CharField(),
+        ),
+    )
+
+    # Build response objects so thumbnail uses the storage backend URL (v.thumbnail.url)
+    videos_payload = []
+    for v in qs:
+        videos_payload.append({
+            'id': v.id,
+            'uid': str(v.uid),
+            'title': v.title,
+            'description': v.description,
+            'thumbnail': v.thumbnail.url if v.thumbnail else None,
+            'duration': str(v.duration) if v.duration else None,
+            'views': v.views_count,
+            'likes_count': v.likes_count,
+            'dislikes_count': v.dislikes_count,
+            'slug': v.slug,
+            'created_at': v.created_at,
+            'parent_category_name': getattr(v, 'parent_category_name', None),
+            'category_name': getattr(v, 'category_name', None),
+            'has_liked': getattr(v, 'has_liked', False),
+            'has_disliked': getattr(v, 'has_disliked', False),
+            'stream_url': v.stream_url,
+            'is_ready': getattr(v, 'is_ready', False),
+        })
 
     return success_response({
-        'videos': serializer.data,
+        'videos': videos_payload,
         'has_more': False,
     })
 

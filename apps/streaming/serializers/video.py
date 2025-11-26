@@ -19,7 +19,8 @@ class VideoSerializer(serializers.ModelSerializer):
             'processing_error',
             'duration',
             'streaming_url',
-            'is_ready_for_streaming'
+            'is_ready_for_streaming',
+            'created_at',
         ]
 
 
