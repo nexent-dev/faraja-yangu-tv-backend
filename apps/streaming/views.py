@@ -16,7 +16,7 @@ from core.response_wrapper import success_response, error_response
 from rest_framework.decorators import api_view
 from .models import Category, Video, Playlist, PlaylistVideo, Comment, VideoAdSlot
 from apps.streaming.models import Like, Dislike
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from rest_framework.decorators import permission_classes
 from .serializers.category import CategorySerializer
 from .serializers.comment import CommentSerializer, ReplySerializer
@@ -797,6 +797,7 @@ def create_video(request):
     return error_response(serializer.errors)
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 def stream_hls(request, video_slug, file_path):
     """
     Stream HLS files with ad injection support.

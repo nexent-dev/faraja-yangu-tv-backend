@@ -15,6 +15,8 @@ from apps.authentication.serializers.user import UserSerializer
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
+from google.oauth2 import id_token
+from google.auth.transport import requests as google_requests
 # Create your views here.
 
 # ////////////////////////////////////////////////////////////////////////////////////////////////// #
@@ -219,6 +221,112 @@ def verify_email(request):
 def login_with_google(request):
     return success_response(data={})
 
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def login_google(request):
+    """
+    Google OAuth login endpoint.
+    Accepts a Google ID token and returns JWT tokens.
+    Query params: device (android/ios/web), portal (client/cms)
+    """
+    token = request.data.get('id_token') or request.data.get('token')
+    device = request.query_params.get('device', 'web')
+    portal = request.query_params.get('portal', 'client')
+    
+    if not token:
+        return error_response(message='Google ID token is required', code=400)
+    
+    if not settings.GOOGLE_CLIENT_ID:
+        return error_response(message='Google authentication is not configured', code=500)
+    
+    try:
+        # Verify the Google ID token
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            settings.GOOGLE_CLIENT_ID
+        )
+        
+        # Extract user info from the token
+        google_id = idinfo.get('sub')
+        email = idinfo.get('email')
+        email_verified = idinfo.get('email_verified', False)
+        first_name = idinfo.get('given_name', '')
+        last_name = idinfo.get('family_name', '')
+        
+        if not email:
+            return error_response(message='Email not provided by Google', code=400)
+        
+        # Check if user exists
+        user = User.objects.filter(email=email).first()
+        
+        if user:
+            # Update auth provider if needed
+            if user.auth_provider != 'google':
+                user.auth_provider = 'google'
+                user.save()
+        else:
+            # Create new user
+            user = User.objects.create(
+                username=email,
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                auth_provider='google',
+                is_verified=email_verified,
+                is_active=True,
+            )
+            # Create profile for new user
+            profile = Profile.objects.create()
+            user.profile = profile
+            user.save()
+        
+        if not user.is_active:
+            return error_response(message='User account is deactivated', code=403)
+        
+        # Generate JWT tokens
+        refresh = RefreshToken.for_user(user)
+        access_token = refresh.access_token
+        
+        response = success_response(
+            data={
+                'access_token': str(access_token),
+                'user': {
+                    'id': user.id,
+                    'username': user.username,
+                    'email': user.email,
+                    'first_name': user.first_name,
+                    'last_name': user.last_name,
+                    'roles': list(user.roles.all().values()),
+                    'is_new_user': not user.profile or not user.profile.id,
+                },
+                'device': device,
+                'portal': portal,
+            },
+            message='Login successful'
+        )
+        
+        # Set refresh token as HTTP-only cookie
+        response.set_cookie(
+            'refresh_token',
+            str(refresh),
+            max_age=60 * 60 * 24 * 14,  # 14 days
+            httponly=True,
+            secure=not settings.DEBUG,
+            samesite='Lax'
+        )
+        
+        return response
+        
+    except ValueError as e:
+        return error_response(message='Invalid Google token', code=401)
+    except Exception as e:
+        return error_response(message=f'Authentication failed: {str(e)}', code=500)
+
+# ////////////////////////////////////////////////////////////////////////////////////////////////// #
 # ////////////////////////////////////////////////////////////////////////////////////////////////// #
 
 @api_view(['POST'])

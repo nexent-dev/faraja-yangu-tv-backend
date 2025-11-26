@@ -78,3 +78,4 @@ vine==5.1.0
 wcwidth==0.2.14
 zope.interface==7.2
 ffmpeg-python==0.2.0
+google-auth==2.29.0

@@ -46,6 +46,9 @@ SELCOM_MERCHANT_ID = env('SELCOM_MERCHANT_ID', default='your-selcom-merchant-id'
 CLICKPESA_CLIENT_ID = env('CLICKPESA_CLIENT_ID', default='your-clickpesa-client-id')
 POLAR_API_KEY = env('POLAR_API_KEY', default='your-polar-api-key')
 
+# Google OAuth
+GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', default='')
+
 AWS_ACCESS_KEY_ID = env("R2_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY")
 AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME")

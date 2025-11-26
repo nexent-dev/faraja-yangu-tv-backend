@@ -5,6 +5,7 @@ app_name = 'authentication'
 
 urlpatterns = [
     path('login/', views.login, name='login'),
+    path('login/google/', views.login_google, name='login-google'),
     path('login-with-google/', views.login_with_google, name='login-with-google'),
     path('refresh/', views.refresh, name='refresh'),
     path('logout/', views.logout, name='logout'),
