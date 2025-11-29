@@ -440,12 +440,30 @@ def refresh(request):
     if not refresh_token:
         return error_response(message='Refresh token is required')
     
+    fcm_token = request.data.get('fcm_token')
+    device_id = request.data.get('device_id')
+    device_type = request.data.get('device_type')
+    app_version = request.data.get('app_version')
+    
     try:
         refresh = RefreshToken(refresh_token)
     except Exception as e:
         return error_response(message='Invalid refresh token')
     
     access_token = refresh.access_token
+    
+    user_id = refresh['user_id']
+    user = User.objects.get(id=user_id)
+    
+    if user.devices.filter(device_id=device_id).count():
+        user.devices.update(fcm_token=fcm_token, device_type=device_type, app_version=app_version)
+    else:
+        user.devices.create(
+            device_id=device_id,
+            device_type=device_type,
+            app_version=app_version,
+            fcm_token=fcm_token
+        )
     
     response = success_response(data={
         'access_token': str(access_token),

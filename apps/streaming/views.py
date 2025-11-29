@@ -146,9 +146,9 @@ def get_category(request, pk):
 
 
 @api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def get_category_videos(request, pk):
     category = Category.objects.get(pk=pk)
-    category = category.parent if category.parent is not None else category
     videos = Video.objects.filter(category=category)
     serializer = VideoSerializer(videos, many=True)
     return success_response(serializer.data)

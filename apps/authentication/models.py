@@ -47,6 +47,14 @@ class Profile(BaseModel):
     def favorite_videos_count(self):
         return self.favorite_videos.count()
 
+class Devices(BaseModel):
+    device_os = models.CharField(max_length=255)
+    device_id = models.CharField(max_length=255)
+    device_type = models.CharField(max_length=255)
+    app_version = models.CharField(max_length=255)
+    fcm_token = models.TextField()
+    is_active = models.BooleanField(default=True)
+
 class User(AbstractUser):
     
     profile = models.OneToOneField('authentication.Profile', related_name='user', on_delete=models.CASCADE, null=True, blank=True)
@@ -56,6 +64,7 @@ class User(AbstractUser):
     last_login = models.DateTimeField(auto_now=True)
     auth_provider = models.CharField(max_length=255)
     roles = models.ManyToManyField('authentication.Role', related_name='users', default=Role.ROLES.USER)
+    devices = models.ManyToManyField('authentication.Devices', related_name='users', blank=True)
     
 class OTP(BaseModel):
     user = models.OneToOneField('authentication.User', related_name='otp', on_delete=models.CASCADE)

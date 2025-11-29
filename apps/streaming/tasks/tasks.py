@@ -7,10 +7,117 @@ from datetime import timedelta
 from celery import shared_task
 from django.conf import settings
 from django.core.files.storage import default_storage
+from apps.analytics.models import Notification
 from apps.streaming.models import Video
 from apps.streaming.services.video_processor import VideoProcessor
 from farajayangu_be.celery import app as celery_app
+from apps.authentication.models import Devices, User
+from apps.authentication.models import Role
 logger = logging.getLogger(__name__)
+
+class UserGroupTypes:
+    ALL = "all"
+    CLIENTS = "clients"
+    ADMINS = "admins"
+    
+
+class NotificationTypes:
+    NEW_VIDEO = "new_video"
+    COMMENT_REPLY = "comment_reply"    
+
+
+def _get_users(target: UserGroupTypes):
+    if target == UserGroupTypes.ALL:
+        return User.objects.all()
+    elif target == UserGroupTypes.CLIENTS:
+        return User.objects.filter(roles__name=Role.ROLES.USER)
+    elif target == UserGroupTypes.ADMINS:
+        return User.objects.filter(roles__name=Role.ROLES.ADMIN)
+    else:
+        return User.objects.none()
+
+def _send_notification(fcm_token: str, title: str, body: str, data: dict = None):
+    """
+    Send push notification to a device via FCM.
+    
+    Args:
+        fcm_token: The device's FCM registration token
+        title: Notification title
+        body: Notification body
+        data: Optional data payload
+    """
+    import firebase_admin
+    from firebase_admin import messaging, credentials
+    
+    # Initialize Firebase app if not already initialized
+    if not firebase_admin._apps:
+        cred = credentials.Certificate({
+            "type": "service_account",
+            "project_id": settings.FIREBASE_PROJECT_ID,
+            "private_key_id": settings.FIREBASE_PRIVATE_KEY_ID,
+            "private_key": settings.FIREBASE_PRIVATE_KEY,
+            "client_email": settings.FIREBASE_CLIENT_EMAIL,
+            "client_id": settings.FIREBASE_CLIENT_ID,
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": f"https://www.googleapis.com/robot/v1/metadata/x509/{settings.FIREBASE_CLIENT_EMAIL.replace('@', '%40')}",
+        })
+        firebase_admin.initialize_app(cred)
+    
+    message = messaging.Message(
+        notification=messaging.Notification(
+            title=title,
+            body=body,
+        ),
+        data=data or {},
+        token=fcm_token,
+    )
+    
+    try:
+        response = messaging.send(message)
+        logger.info(f"Successfully sent notification: {response}")
+        return response
+    except Exception as e:
+        logger.error(f"Failed to send notification: {e}")
+        return None
+
+    
+@celery_app.task(bind=True)
+def send_push_notification(self, target: UserGroupTypes, notification_type: NotificationTypes, title: str, message: str, metadata: dict = None):
+    
+    get_users = _get_users(target)
+    sent_count = 0
+    failed_count = 0
+    
+    if not title:
+        if notification_type == NotificationTypes.NEW_VIDEO:
+            title = "New Video Uploaded"
+        elif notification_type == NotificationTypes.COMMENT_REPLY:
+            title = "You have a new comment reply"
+        
+    for user in get_users:
+        devices: list[Devices] = user.devices.filter(is_active=True)
+        message = message.replace("--username--", user.username)
+        for device in devices:
+            if device.fcm_token:
+                result = _send_notification(device.fcm_token, title, message, data=metadata)
+                if result:
+                    sent_count += 1
+                else:
+                    failed_count += 1
+            print(f"Push notifications sent: {user.username} | {device.fcm_token}")
+        user.notifications.create(
+            user = user,
+            title = title,
+            message = message,
+            type = Notification.NOTIFICATION_TYPES.VIDEO if notification_type == NotificationTypes.NEW_VIDEO else Notification.NOTIFICATION_TYPES.PROMO,
+            is_read = False,
+            target_video_slug = None,
+            target_url = None
+        )
+    
+    print(f"Push notifications sent: {sent_count}, failed: {failed_count}")
 
 @celery_app.task(bind=True)
 def convert_video_to_hls(self, video_id: int):
@@ -95,6 +202,8 @@ def convert_video_to_hls(self, video_id: int):
         logger.info(f"Cleaned up local temp files for video {video_id}")
         
         logger.info(f"Successfully converted video {video_id} to HLS")
+        
+        send_push_notification(UserGroupTypes.CLIENTS, NotificationTypes.NEW_VIDEO, title=f"{video.category.name} | {video.title}", message=f"-Hi, -username--! we have a new {video.category.name} video uploaded", metadata={"video_id": video_id})
         
         return {
             'success': True,
