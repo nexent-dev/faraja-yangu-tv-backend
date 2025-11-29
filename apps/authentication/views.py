@@ -455,15 +455,16 @@ def refresh(request):
     user_id = refresh['user_id']
     user = User.objects.get(id=user_id)
     
-    if user.devices.filter(device_id=device_id).count():
-        user.devices.update(fcm_token=fcm_token, device_type=device_type, app_version=app_version)
-    else:
-        user.devices.create(
-            device_id=device_id,
-            device_type=device_type,
-            app_version=app_version,
-            fcm_token=fcm_token
-        )
+    if device_id:
+        if user.devices.filter(device_id=device_id).count():
+            user.devices.update(fcm_token=fcm_token, device_type=device_type, app_version=app_version)
+        else:
+            user.devices.create(
+                device_id=device_id,
+                device_type=device_type,
+                app_version=app_version,
+                fcm_token=fcm_token
+            )
     
     response = success_response(data={
         'access_token': str(access_token),
