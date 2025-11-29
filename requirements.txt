@@ -31,7 +31,6 @@ django-storages==1.14.6
 django-timezone-field==7.1
 django_celery_results==2.6.0
 djangorestframework==3.16.1
-djangorestframework-jwt==1.11.0
 djangorestframework_simplejwt==5.5.1
 fuzzywuzzy==0.18.0
 gunicorn==23.0.0
@@ -57,7 +56,7 @@ pyasn1_modules==0.4.1
 pycparser==2.23
 pyexcel==0.7.0
 pyexcel-io==0.6.6
-PyJWT==1.7.1
+PyJWT==2.8.0
 pyOpenSSL==25.0.0
 python-crontab==3.3.0
 python-dateutil==2.9.0.post0
