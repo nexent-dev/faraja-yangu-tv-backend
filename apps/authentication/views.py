@@ -10,7 +10,7 @@ from core.response_wrapper import success_response, error_response
 from rest_framework.decorators import api_view
 from rest_framework.decorators import permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from apps.authentication.models import OTP, User, Profile
+from apps.authentication.models import OTP, Role, User, Profile
 from apps.authentication.serializers.user import UserSerializer
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -384,7 +384,9 @@ def register(request):
 
     # Set password securely
     user.set_password(password)
+    user.roles.add(Role.objects.get(name=Role.ROLES.USER))
     user.save()
+    
 
     # Ensure a profile is created and linked to this user
     if not user.profile:

@@ -1,0 +1,2 @@
+from apps.management.serializers.clients import ClientSerializer
+from apps.management.serializers.video_ad_slot import VideoAdSlotSerializer, VideoAdSlotCreateSerializer

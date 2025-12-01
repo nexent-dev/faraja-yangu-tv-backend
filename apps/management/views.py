@@ -10,10 +10,9 @@ from rest_framework.decorators import api_view, permission_classes
 from django.utils import timezone
 from django.db.models import Q, Count, Sum
 
-from apps.authentication.models import User
-from apps.authentication.models import Role
-from apps.management.serializers.clients import ClientSerializer
-from apps.streaming.models import View, Like, Comment
+from apps.authentication.models import User, Role, Devices
+from apps.management.serializers import ClientSerializer, VideoAdSlotSerializer, VideoAdSlotCreateSerializer
+from apps.streaming.models import VideoAdSlot, View, Like, Comment
 from apps.advertising.models import Ad
 from apps.analytics.models import Analytics, Report, Notification
 
@@ -181,6 +180,32 @@ def get_dashboard_summary(request):
         "total": Notification.objects.count(),
         "unread": Notification.objects.filter(is_read=False).count(),
     }
+    
+    # Device metrics
+    total_devices = Devices.objects.filter(is_active=True).count()
+    android_count = Devices.objects.filter(is_active=True, device_os__icontains='android').count()
+    ios_count = Devices.objects.filter(is_active=True, device_os__icontains='ios').count()
+    
+    # Get latest app version to determine up-to-date ratio
+    # Assuming higher version strings are newer (e.g., "1.0.0", "1.1.0")
+    latest_version = Devices.objects.filter(is_active=True).order_by('-app_version').values_list('app_version', flat=True).first()
+    
+    if latest_version and total_devices > 0:
+        uptodate_count = Devices.objects.filter(is_active=True, app_version=latest_version).count()
+        uptodate_ratio = round((uptodate_count / total_devices) * 100, 2)
+        outdated_ratio = round(100 - uptodate_ratio, 2)
+    else:
+        uptodate_ratio = 0
+        outdated_ratio = 0
+    
+    devices = {
+        "total": total_devices,
+        "androids": android_count,
+        "iOS": ios_count,
+        "uptodate_ratio": uptodate_ratio,
+        "outdated_ratio": outdated_ratio,
+        "latest_version": latest_version or "N/A",
+    }
 
     payload = {
         "clients": registrations,  # alias for convenience
@@ -199,6 +224,7 @@ def get_dashboard_summary(request):
             "analytics": analytics_metrics,
             "notifications": notifications_metrics,
         },
+        "devices": devices,
         "current_date": today.isoformat(),
     }
 
@@ -307,3 +333,49 @@ def get_dashboard_analytics_chart(request):
     }
 
     return success_response(payload)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_interceptor_ads(request):
+    """Get all video ad slots (interceptor ads).
+    
+    Returns a list of all video ad slots with nested video details.
+    """
+    ad_slots = VideoAdSlot.objects.select_related('video').order_by('-created_at')
+    serializer = VideoAdSlotSerializer(ad_slots, many=True)
+    return success_response(serializer.data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_interceptor_ad(request):
+    """Create a new video ad slot (interceptor ad).
+    
+    Payload:
+    - video: int (video ID)
+    - start_time: str (HH:MM:SS format)
+    - end_time: str (HH:MM:SS format)
+    """
+    serializer = VideoAdSlotCreateSerializer(data=request.data)
+    if serializer.is_valid():
+        ad_slot = serializer.save()
+        return success_response(serializer.data, message='Interceptor ad created successfully')
+    
+    return error_response(serializer.errors, code=400)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_interceptor_ad(request, pk):
+    """Delete an interceptor ad.
+    
+    URL Parameters:
+    - pk: int (interceptor ad ID)
+    """
+    try:
+        ad_slot = VideoAdSlot.objects.get(pk=pk)
+    except VideoAdSlot.DoesNotExist:
+        return error_response('Interceptor ad not found', code=404)
+    
+    ad_slot.delete()
+    return success_response(message='Interceptor ad deleted successfully')

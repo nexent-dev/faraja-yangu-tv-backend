@@ -9,4 +9,5 @@ urlpatterns = [
     path('create-carousel-ad/', views.create_carousel_ad, name='create-carousel-ad'),
     path('update-carousel-ad/<int:pk>/', views.update_carousel_ad, name='update-carousel-ad'),
     path('delete-carousel-ad/<int:pk>/', views.delete_carousel_ad, name='delete-carousel-ad'),
+    path('claim-reward/', views.claim_reward, name='claim-reward'),
 ]

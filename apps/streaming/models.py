@@ -9,6 +9,7 @@ class Category(BaseModel):
     description = models.TextField()
     slug = models.SlugField(unique=True)
     thumbnail = models.ImageField(upload_to='categories', null=True, blank=True)
+    cover = models.ImageField(upload_to='categories', null=True, blank=True)
     parent = models.ForeignKey('self', related_name='subcategories', on_delete=models.CASCADE, null=True, blank=True)
 
     def __str__(self):
@@ -29,7 +30,7 @@ class Video(BaseModel):
     description = models.TextField()
     slug = models.SlugField(unique=True, null=True, blank=True)
     thumbnail = models.ImageField(upload_to='videos', null=True, blank=True)
-    category = models.ForeignKey(Category, related_name='videos', on_delete=models.CASCADE)
+    category = models.ForeignKey(Category, related_name='videos', on_delete=models.CASCADE, null=True, blank=True )
     
     # Original uploaded video (will be deleted after HLS conversion)
     video = models.FileField(upload_to='videos/originals', null=True, blank=True)
@@ -104,13 +105,14 @@ class View(BaseModel):
         return f'{self.user} views {self.video}'
 
 class VideoAdSlot(BaseModel):
+    """Interceptor ad slot - defines when an ad break should occur during video playback."""
     video = models.ForeignKey(Video, related_name='ad_slots', on_delete=models.CASCADE)
-    ad = models.ForeignKey('advertising.Ad', related_name='ad_slots', on_delete=models.CASCADE)
+    ad = models.ForeignKey('advertising.Ad', related_name='ad_slots', on_delete=models.CASCADE, null=True, blank=True)
     start_time = models.TimeField()
     end_time = models.TimeField()
     
     def __str__(self):
-        return f'{self.video} ad slot'
+        return f'{self.video} ad slot ({self.start_time} - {self.end_time})'
 
 
 class Playlist(BaseModel):

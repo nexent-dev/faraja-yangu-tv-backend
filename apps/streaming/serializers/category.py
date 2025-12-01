@@ -7,6 +7,7 @@ class CategorySerializer(serializers.ModelSerializer):
     videos = serializers.SerializerMethodField()
     video_count = serializers.SerializerMethodField()
     subcategories = serializers.SerializerMethodField()
+    parent_name = serializers.CharField(source='parent.name', read_only=True)
     
     class Meta:
         model = Category

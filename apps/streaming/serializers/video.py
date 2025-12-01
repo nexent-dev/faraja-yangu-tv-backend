@@ -8,6 +8,7 @@ class VideoSerializer(serializers.ModelSerializer):
     """
     streaming_url = serializers.ReadOnlyField()
     is_ready_for_streaming = serializers.ReadOnlyField()
+    category_name = serializers.CharField(source='category.name', read_only=True)
     
     class Meta:
         model = Video
