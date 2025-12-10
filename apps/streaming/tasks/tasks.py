@@ -3,7 +3,7 @@ Celery tasks for video processing and HLS conversion.
 """
 import os
 import logging
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 from celery import shared_task
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -301,3 +301,66 @@ def cleanup_local_files(video_file_path: str, hls_dir: str):
             
     except Exception as e:
         logger.warning(f"Error during cleanup: {str(e)}")
+
+
+@celery_app.task(bind=True)
+def cleanup_stale_chunks(self):
+    """
+    Clean up chunk files older than 12 hours.
+    
+    This task runs daily at midnight to remove orphaned chunks
+    from incomplete uploads.
+    """
+    chunk_base_dir = "videos/chunks"
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=12)
+    deleted_count = 0
+    
+    try:
+        # List all video chunk directories
+        try:
+            dirs, _ = default_storage.listdir(chunk_base_dir)
+        except FileNotFoundError:
+            logger.info("No chunk directory found, nothing to clean up")
+            return {'success': True, 'deleted': 0}
+        
+        for video_dir in dirs:
+            chunk_dir = f"{chunk_base_dir}/{video_dir}"
+            try:
+                _, files = default_storage.listdir(chunk_dir)
+            except FileNotFoundError:
+                continue
+            
+            dir_has_old_chunks = False
+            for filename in files:
+                if not filename.startswith('chunk_'):
+                    continue
+                
+                chunk_path = f"{chunk_dir}/{filename}"
+                try:
+                    modified_time = default_storage.get_modified_time(chunk_path)
+                    if modified_time < cutoff_time:
+                        print(f"Deleting {chunk_path}")
+                        default_storage.delete(chunk_path)
+                        deleted_count += 1
+                        dir_has_old_chunks = True
+                        print(f"Deleted stale chunk: {chunk_path}")
+                        logger.debug(f"Deleted stale chunk: {chunk_path}")
+                except Exception as e:
+                    logger.warning(f"Could not process chunk {chunk_path}: {e}")
+            
+            # Try to remove empty directory
+            if dir_has_old_chunks:
+                try:
+                    _, remaining_files = default_storage.listdir(chunk_dir)
+                    if not remaining_files:
+                        default_storage.delete(chunk_dir)
+                        logger.debug(f"Removed empty chunk directory: {chunk_dir}")
+                except Exception:
+                    pass
+        
+        logger.info(f"Chunk cleanup completed: deleted {deleted_count} stale chunks")
+        return {'success': True, 'deleted': deleted_count}
+        
+    except Exception as e:
+        logger.error(f"Error during chunk cleanup: {str(e)}", exc_info=True)
+        return {'success': False, 'error': str(e)}

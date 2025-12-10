@@ -627,12 +627,18 @@ def upload_chunk(request):
         saved_path = default_storage.save(chunk_path, chunk_file)
         logger.info(f"Saved chunk {chunk_index}/{total_chunks} for video {video_id} at {saved_path}")
         
-        # Check if all chunks are uploaded
-        uploaded_chunks = []
-        for i in range(total_chunks):
-            test_chunk_path = os.path.join(chunk_dir, f"chunk_{i:04d}")
-            if default_storage.exists(test_chunk_path):
-                uploaded_chunks.append(i)
+        # Check uploaded chunks using a single listdir call instead of N exists() calls
+        # This is much faster for S3/cloud storage backends
+        try:
+            existing_files = default_storage.listdir(chunk_dir)[1]  # [1] = files, [0] = dirs
+            uploaded_chunks = [
+                int(f.replace('chunk_', '')) 
+                for f in existing_files 
+                if f.startswith('chunk_')
+            ]
+        except FileNotFoundError:
+            # Directory doesn't exist yet, only current chunk uploaded
+            uploaded_chunks = [chunk_index]
         
         is_complete = len(uploaded_chunks) == total_chunks
         
