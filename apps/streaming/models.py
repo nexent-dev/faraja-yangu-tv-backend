@@ -106,13 +106,49 @@ class View(BaseModel):
 
 class VideoAdSlot(BaseModel):
     """Interceptor ad slot - defines when an ad break should occur during video playback."""
-    video = models.ForeignKey(Video, related_name='ad_slots', on_delete=models.CASCADE)
+    
+    class MediaType(models.TextChoices):
+        IMAGE = 'image', 'Image'
+        VIDEO = 'video', 'Video'
+    
+    video = models.ForeignKey(Video, related_name='ad_slots', on_delete=models.CASCADE, null=True, blank=True)
+    
+    # Optional link to existing Ad (for reusing ads from advertising system)
     ad = models.ForeignKey('advertising.Ad', related_name='ad_slots', on_delete=models.CASCADE, null=True, blank=True)
-    start_time = models.TimeField()
-    end_time = models.TimeField()
+    
+    is_active = models.BooleanField(default=True)
+    
+    # Self-contained interceptor ad fields
+    title = models.CharField(max_length=255, null=True, blank=True)
+    description = models.TextField(null=True, blank=True)
+    media_type = models.CharField(max_length=10, choices=MediaType.choices, default=MediaType.IMAGE)
+    media_file = models.FileField(upload_to='interceptor_ads/', null=True, blank=True,
+                                  help_text='Image or video file for the interceptor ad')
+    redirect_link = models.URLField(max_length=500, null=True, blank=True,
+                                    help_text='URL to redirect when ad is clicked')
+    display_duration = models.PositiveIntegerField(default=5,
+                                                   help_text='Duration in seconds to display the ad (for images)')
+    
+    # Timing fields
+    start_time = models.TimeField(help_text='When the ad should appear during video playback')
+    end_time = models.TimeField(help_text='When the ad slot ends')
+    
+    class Meta:
+        ordering = ['start_time']
     
     def __str__(self):
         return f'{self.video} ad slot ({self.start_time} - {self.end_time})'
+    
+    @property
+    def is_self_contained(self):
+        """Check if this ad slot uses its own media instead of linked Ad."""
+        return self.media_file and not self.ad
+    
+    def clean(self):
+        """Validate that either ad or media_file is provided."""
+        from django.core.exceptions import ValidationError
+        if not self.ad and not self.media_file:
+            raise ValidationError('Either an Ad reference or a media_file must be provided.')
 
 
 class Playlist(BaseModel):

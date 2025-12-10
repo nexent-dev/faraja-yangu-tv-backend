@@ -33,59 +33,118 @@ import mimetypes
 import os
 import hashlib
 import io
+import random
 from django.shortcuts import get_object_or_404
 
 logger = logging.getLogger(__name__)
 
 
-def inject_ad_markers(playlist_content: str, video_slug: str, ad_interval: int = 120) -> str:
+def get_random_active_ad():
+    """Get a random active interceptor ad from the database."""
+    active_ads = VideoAdSlot.objects.filter(is_active=True).exclude(media_file='')
+    if not active_ads.exists():
+        return None
+    return random.choice(list(active_ads))
+
+
+def inject_ad_markers(playlist_content: str, video_slug: str, min_interval: int = 300) -> str:
     """
     Inject ad markers into HLS playlist for client-side ad insertion.
+    
+    Uses VideoAdSlot model to get active ads and injects them at random intervals,
+    ensuring at least 5 minutes (300 seconds) between ads.
     
     Args:
         playlist_content: Original playlist content
         video_slug: Video slug for tracking
-        ad_interval: Seconds between ad breaks (default: 120 = 2 minutes)
+        min_interval: Minimum seconds between ad breaks (default: 300 = 5 minutes)
     
     Returns:
         Modified playlist with ad markers
     """
+    # Get active ads from database
+    active_ads = list(VideoAdSlot.objects.filter(is_active=True).exclude(media_file=''))
+    if not active_ads:
+        print(f"No active interceptor ads found for {video_slug}")
+        return playlist_content
+    
     lines = playlist_content.split('\n')
     new_lines = []
     current_duration = 0.0
     last_ad_time = 0.0
     ad_count = 0
-    first_segment_ad_inserted = False
+    
+    # Calculate total video duration first
+    total_duration = 0.0
+    for line in lines:
+        if line.startswith('#EXTINF:'):
+            try:
+                duration_str = line.split(':')[1].split(',')[0]
+                total_duration += float(duration_str)
+            except (IndexError, ValueError):
+                pass
+    
+    # Generate random ad insertion points with random intervals (5, 10, 20, 30 min)
+    # Minimum interval is 5 minutes (300 seconds) after the initial ad
+    interval_options = [300, 600, 1200, 1800]  # 5, 10, 20, 30 minutes in seconds
+    
+    ad_insertion_points = []
+    if total_duration > 10:  # Only insert ads if video is longer than 10 seconds
+        # Pre-roll ad at the very start (0 seconds)
+        ad_insertion_points.append(0)
+        
+        # Subsequent ads after random intervals (5, 10, 20, or 30 min)
+        current_point = random.choice(interval_options)
+        while current_point < total_duration - 30:  # Don't insert ad in last 30 seconds
+            ad_insertion_points.append(current_point)
+            current_point += random.choice(interval_options)
+    
+    print(f"Planned ad insertion points for {video_slug}: {ad_insertion_points}")
+    
+    current_duration = 0.0
+    next_ad_index = 0
     
     for line in lines:
         # Track segment duration
         if line.startswith('#EXTINF:'):
             try:
-                # Extract duration from #EXTINF:10.0,
                 duration_str = line.split(':')[1].split(',')[0]
                 segment_duration = float(duration_str)
                 current_duration += segment_duration
-
-                # Ensure a pre-roll ad before the very first media segment
-                if not first_segment_ad_inserted:
+                
+                # Check if we should insert an ad at this point
+                if (next_ad_index < len(ad_insertion_points) and 
+                    current_duration >= ad_insertion_points[next_ad_index]):
+                    
+                    # Pick a random ad from active ads
+                    ad = random.choice(active_ads)
                     ad_count += 1
-                    new_lines.append('#EXT-X-CUE-OUT:DURATION=30')
-                    new_lines.append(f'#EXT-X-ASSET:CAID=ad-{ad_count}')
-                    logger.info(f"Injected pre-roll ad marker {ad_count} at start for {video_slug}")
-                    first_segment_ad_inserted = True
-
-                # Time-based ad breaks after every ad_interval seconds of content
-                if current_duration - last_ad_time >= ad_interval:
-                    ad_count += 1
-                    new_lines.append('#EXT-X-CUE-OUT:DURATION=30')
-                    new_lines.append(f'#EXT-X-ASSET:CAID=ad-{ad_count}')
-                    logger.info(f"Injected ad marker {ad_count} at {current_duration}s for {video_slug}")
+                    
+                    # Get ad duration
+                    ad_duration = ad.display_duration or 5
+                    
+                    # Inject HLS ad markers with ad metadata
+                    new_lines.append(f'#EXT-X-CUE-OUT:DURATION={ad_duration}')
+                    new_lines.append(f'#EXT-X-ASSET:CAID=interceptor-{ad.id}')
+                    
+                    # Add custom metadata for the player
+                    if ad.media_file:
+                        new_lines.append(f'#EXT-X-AD-URL:{ad.media_file.url}')
+                    if ad.redirect_link:
+                        new_lines.append(f'#EXT-X-AD-CLICK:{ad.redirect_link}')
+                    new_lines.append(f'#EXT-X-AD-TYPE:{ad.media_type}')
+                    
+                    logger.info(f"Injected ad {ad.id} at {current_duration:.1f}s for {video_slug}")
+                    
+                    next_ad_index += 1
                     last_ad_time = current_duration
+                    
             except (IndexError, ValueError):
                 pass
         
         new_lines.append(line)
     
+    logger.info(f"Injected {ad_count} ads into playlist for {video_slug}")
     return '\n'.join(new_lines)
 
 # Create your views here.
@@ -882,7 +941,7 @@ def stream_hls(request, video_slug, file_path):
             
             # Inject ad markers for variant playlists (not master playlist)
             if '/' in file_path:  # This is a variant playlist like "1080p/1080p.m3u8"
-                modified_content = inject_ad_markers(modified_content, video_slug, ad_interval=120)
+                modified_content = inject_ad_markers(modified_content, video_slug)
             
             # Return modified playlist
             response = HttpResponse(modified_content, content_type=content_type)
@@ -1085,13 +1144,17 @@ def view(request, video_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def interceptor_ads(request, video_uid):
-    """Return an interceptor ad for the given video uid.
+    """Return all interceptor ads for the given video uid.
+
+    Supports two types of ad slots:
+    1. Linked Ad: References an existing Ad from the advertising system
+    2. Self-contained: Has its own media_file (image/video) with redirect_link
 
     Outer contract:
-        {"data": { ... } | null}
+        {"data": [ ... ] | []}
 
     - 404 if video_uid does not exist
-    - data == null if there is no ad to show
+    - data == [] if there are no ads to show
     """
 
     # Ensure video exists
@@ -1100,54 +1163,83 @@ def interceptor_ads(request, video_uid):
     # Optional future-proof position hint ("pre" | "mid" | "post")
     position = request.GET.get('position')  # noqa: F841  # currently unused
 
-    # Select first published ad slot for this video for now
-    slot = (
+    # Get all ad slots for this video (both linked and self-contained)
+    slots = (
         VideoAdSlot.objects
         .select_related('ad')
-        .filter(video=video, ad__is_published=True)
+        .filter(video=video)
         .order_by('start_time')
-        .first()
     )
 
-    if not slot or not slot.ad:
-        return success_response(None)
+    # Filter: include slots with published ad OR self-contained media
+    valid_slots = [
+        slot for slot in slots
+        if (slot.ad and slot.ad.is_published) or slot.media_file
+    ]
 
-    ad = slot.ad
+    if not valid_slots:
+        return success_response([])
 
-    # Determine media type and asset URLs
-    if ad.type == Ad.AD_TYPES.VIDEO and ad.video:
-        media_type = "VIDEO"
-        video_url = ad.video.url
-        image_url = None
-    else:
-        media_type = "IMAGE"
-        image_url = ad.thumbnail.url if ad.thumbnail else None
-        video_url = None
+    ads_payload = []
+    for slot in valid_slots:
+        if slot.media_file:
+            # Self-contained interceptor ad
+            media_type = slot.media_type.upper()  # 'IMAGE' or 'VIDEO'
+            if media_type == 'VIDEO':
+                video_url = request.build_absolute_uri(slot.media_file.url)
+                image_url = None
+            else:
+                image_url = request.build_absolute_uri(slot.media_file.url)
+                video_url = None
+            
+            total_seconds = slot.display_duration or 5
+            click_url = slot.redirect_link
+            ad_id = f"slot_{slot.id}"
+        elif slot.ad:
+            # Linked Ad from advertising system
+            ad = slot.ad
+            if ad.type == Ad.AD_TYPES.VIDEO and ad.video:
+                media_type = "VIDEO"
+                video_url = ad.video.url
+                image_url = None
+            else:
+                media_type = "IMAGE"
+                image_url = ad.thumbnail.url if ad.thumbnail else None
+                video_url = None
 
-    # Duration in seconds; fall back to default if missing
-    if ad.duration:
-        total_seconds = int(ad.duration.total_seconds())
-    else:
-        total_seconds = 15
+            if ad.duration:
+                total_seconds = int(ad.duration.total_seconds())
+            else:
+                total_seconds = 15
+            click_url = None
+            ad_id = ad.id
+        else:
+            continue
 
-    skippable_after = min(10, total_seconds)
+        skippable_after = min(10, total_seconds)
 
-    payload = {
-        "id": ad.id,
-        "media_type": media_type,
-        "image_url": image_url,
-        "video_url": video_url,
-        "click_url": None,
-        "duration": total_seconds,
-        "skippable_after": skippable_after,
-        "label": "Sponsored",
-        "tracking": {
-            "impression_url": None,
-            "click_url": None,
-        },
-    }
+        # Convert TimeField to seconds for start/end time
+        def time_to_seconds(t):
+            return t.hour * 3600 + t.minute * 60 + t.second if t else 0
 
-    return success_response(payload)
+        ads_payload.append({
+            "id": ad_id,
+            "media_type": media_type,
+            "image_url": image_url,
+            "video_url": video_url,
+            "click_url": click_url,
+            "duration": total_seconds,
+            "skippable_after": skippable_after,
+            "start_time": time_to_seconds(slot.start_time),
+            "end_time": time_to_seconds(slot.end_time),
+            "label": "Sponsored",
+            "tracking": {
+                "impression_url": None,
+                "click_url": None,
+            },
+        })
+
+    return success_response(ads_payload)
 
 
 @api_view(['GET'])

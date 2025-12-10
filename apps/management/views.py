@@ -340,9 +340,10 @@ def get_interceptor_ads(request):
     """Get all video ad slots (interceptor ads).
     
     Returns a list of all video ad slots with nested video details.
+    Supports both linked Ad references and self-contained media (image/video).
     """
-    ad_slots = VideoAdSlot.objects.select_related('video').order_by('-created_at')
-    serializer = VideoAdSlotSerializer(ad_slots, many=True)
+    ad_slots = VideoAdSlot.objects.select_related('video', 'ad').order_by('-created_at')
+    serializer = VideoAdSlotSerializer(ad_slots, many=True, context={'request': request})
     return success_response(serializer.data)
 
 
@@ -351,17 +352,77 @@ def get_interceptor_ads(request):
 def create_interceptor_ad(request):
     """Create a new video ad slot (interceptor ad).
     
-    Payload:
-    - video: int (video ID)
-    - start_time: str (HH:MM:SS format)
-    - end_time: str (HH:MM:SS format)
+    Supports two modes:
+    1. Linked Ad: Reference an existing Ad from the advertising system
+    2. Self-contained: Upload media directly with the ad slot
+    
+    Payload (form-data for file uploads):
+    - video: int (video ID) - required
+    - start_time: str (HH:MM:SS format) - required
+    - end_time: str (HH:MM:SS format) - required
+    - ad: int (Ad ID) - optional, use for linked ads
+    - media_type: str ('image' or 'video') - required for self-contained
+    - media_file: file (image/video binary) - required for self-contained
+    - redirect_link: str (URL) - optional
+    - display_duration: int (seconds) - optional, default 5
     """
     serializer = VideoAdSlotCreateSerializer(data=request.data)
     if serializer.is_valid():
         ad_slot = serializer.save()
-        return success_response(serializer.data, message='Interceptor ad created successfully')
+        # Return full details with media URL
+        response_serializer = VideoAdSlotSerializer(ad_slot, context={'request': request})
+        return success_response(response_serializer.data, message='Interceptor ad created successfully')
     
     return error_response(serializer.errors, code=400)
+
+
+@api_view(['PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def update_interceptor_ad(request, pk):
+    """Update an existing interceptor ad.
+    
+    URL Parameters:
+    - pk: int (interceptor ad ID)
+    
+    Payload (form-data for file uploads):
+    - video: int (video ID) - optional
+    - start_time: str (HH:MM:SS format) - optional
+    - end_time: str (HH:MM:SS format) - optional
+    - ad: int (Ad ID) - optional
+    - media_type: str ('image' or 'video') - optional
+    - media_file: file (image/video binary) - optional
+    - redirect_link: str (URL) - optional
+    - display_duration: int (seconds) - optional
+    """
+    try:
+        ad_slot = VideoAdSlot.objects.get(pk=pk)
+    except VideoAdSlot.DoesNotExist:
+        return error_response('Interceptor ad not found', code=404)
+    
+    serializer = VideoAdSlotCreateSerializer(ad_slot, data=request.data, partial=True)
+    if serializer.is_valid():
+        serializer.save()
+        response_serializer = VideoAdSlotSerializer(ad_slot, context={'request': request})
+        return success_response(response_serializer.data, message='Interceptor ad updated successfully')
+    
+    return error_response(serializer.errors, code=400)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_interceptor_ad(request, pk):
+    """Get a single interceptor ad by ID.
+    
+    URL Parameters:
+    - pk: int (interceptor ad ID)
+    """
+    try:
+        ad_slot = VideoAdSlot.objects.select_related('video', 'ad').get(pk=pk)
+    except VideoAdSlot.DoesNotExist:
+        return error_response('Interceptor ad not found', code=404)
+    
+    serializer = VideoAdSlotSerializer(ad_slot, context={'request': request})
+    return success_response(serializer.data)
 
 
 @api_view(['DELETE'])
@@ -379,3 +440,26 @@ def delete_interceptor_ad(request, pk):
     
     ad_slot.delete()
     return success_response(message='Interceptor ad deleted successfully')
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def toggle_interceptor_ad(request, pk):
+    """Toggle the is_active status of an interceptor ad.
+    
+    URL Parameters:
+    - pk: int (interceptor ad ID)
+    
+    Returns the updated ad with new is_active status.
+    """
+    try:
+        ad_slot = VideoAdSlot.objects.get(pk=pk)
+    except VideoAdSlot.DoesNotExist:
+        return error_response('Interceptor ad not found', code=404)
+    
+    ad_slot.is_active = not ad_slot.is_active
+    ad_slot.save(update_fields=['is_active', 'updated_at'])
+    
+    serializer = VideoAdSlotSerializer(ad_slot, context={'request': request})
+    status = 'activated' if ad_slot.is_active else 'deactivated'
+    return success_response(serializer.data, message=f'Interceptor ad {status} successfully')

@@ -119,6 +119,7 @@ def profile(request):
         'last_name': user.last_name,
         'roles': user.roles.all().values(),
         'profile': ProfileSerializer(user.profile).data,
+        'notification_count': User.notifications.filter(is_read=False).count()
     })
 
 # ////////////////////////////////////////////////////////////////////////////////////////////////// #
