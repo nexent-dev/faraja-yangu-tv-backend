@@ -206,7 +206,7 @@ def convert_video_to_hls(self, video_id: int):
         
         logger.info(f"Successfully converted video {video_id} to HLS")
         
-        send_push_notification(UserGroupTypes.CLIENTS, NotificationTypes.NEW_VIDEO, title=f"{video.category.name} | {video.title}", message=f"-Hi, -username--! we have a new {video.category.name} video uploaded", metadata={"video_id": video_id})
+        send_push_notification(UserGroupTypes.CLIENTS, NotificationTypes.NEW_VIDEO, title=f"{video.category.name} | {video.title}", message=f"Hi, --username--! we have a new {video.category.name} video uploaded", metadata={"video_id": video_id})
         
         return {
             'success': True,
