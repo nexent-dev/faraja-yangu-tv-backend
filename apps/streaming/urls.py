@@ -59,7 +59,7 @@ urlpatterns = [
     path('playlists/', views.playlist_list, name='playlist-list'),
     path('playlists/create/', views.playlist_create, name='playlist-create'),
     path('playlists/<str:playlist_uid>/', views.playlist_detail, name='playlist-detail'),
-    path('playlists/<str:playlist_uid>/videos/', views.playlist_add_video, name='playlist-add-video'),
+    path('playlists/<str:playlist_id>/videos/', views.playlist_add_video, name='playlist-add-video'),
     path('playlists/<str:playlist_uid>/videos/<str:video_uid>/', views.playlist_remove_video, name='playlist-remove-video'),
     path('playlists/<str:playlist_uid>/delete/', views.playlist_delete, name='playlist-delete'),
     

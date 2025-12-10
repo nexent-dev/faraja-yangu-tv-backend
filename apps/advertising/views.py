@@ -98,9 +98,9 @@ def claim_reward(request):
     ad_id = serializer.validated_data.get('ad_id')
     
     # Calculate credits
-    credits_earned = time_spent_seconds * CREDITS_PER_SECOND
-    if ad_clicked:
-        credits_earned += AD_CLICK_BONUS
+    credits_earned = 10
+    # if ad_clicked:
+    #     credits_earned += AD_CLICK_BONUS
     
     # Get or create user profile
     user = request.user

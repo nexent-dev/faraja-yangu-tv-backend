@@ -94,3 +94,16 @@ def delete_notification(request, pk):
 
     notification.delete()
     return success_response(None, message='Notification deleted.')
+
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def clear_all_notification(request):
+    try:
+        notification = Notification.objects.filter(user=request.user)
+    except Notification.DoesNotExist:
+        return error_response('Notification not found', code=404)
+
+    notification.delete()
+    return success_response(None, message='Notifications deleted.')

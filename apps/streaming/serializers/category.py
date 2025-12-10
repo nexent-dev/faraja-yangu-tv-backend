@@ -21,17 +21,18 @@ class CategorySerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
     
     def get_video_count(self, obj):
-        """Return total number of videos in this category"""
-        return obj.videos.count()
+        """Return total number of published videos in this category"""
+        return obj.videos.filter(is_published=True, processing_status='completed').count()
     
     def get_videos(self, obj):
         """Return most viewed videos if include_videos is True"""
         if not self.include_videos:
             return None
         
-        # Get most viewed videos, limited by video_count
+        # Get most viewed published videos, limited by video_count
         most_viewed = obj.videos.filter(
-            processing_status='completed'
+            processing_status='completed',
+            is_published=True
         ).order_by('-views_count')[:self.video_limit]
         
         return VideoLightSerializer(most_viewed, many=True).data

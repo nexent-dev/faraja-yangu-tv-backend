@@ -65,12 +65,15 @@ def _send_notification(fcm_token: str, title: str, body: str, data: dict = None)
         })
         firebase_admin.initialize_app(cred)
     
+    # FCM requires all data values to be strings
+    string_data = {k: str(v) for k, v in (data or {}).items()}
+    
     message = messaging.Message(
         notification=messaging.Notification(
             title=title,
             body=body,
         ),
-        data=data or {},
+        data=string_data,
         token=fcm_token,
     )
     

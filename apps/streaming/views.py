@@ -140,8 +140,6 @@ def get_category(request, pk):
         parents=parents
     )
     
-    print(serializer.data)
-    
     return success_response(serializer.data)
 
 
@@ -463,6 +461,9 @@ def mark_video_downloaded(request, video_uid):
     if not profile:
         return error_response({'message': 'Profile not found'})
 
+    profile.credit_accumulation -= 10
+    profile.save()
+    
     try:
         video = Video.objects.get(uid=video_uid)
     except Video.DoesNotExist:
@@ -1635,14 +1636,14 @@ def playlist_detail(request, playlist_uid):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-def playlist_add_video(request, playlist_uid):
+def playlist_add_video(request, playlist_id):
     """Add a video to a playlist.
 
     Expects JSON body: { "video_uid": "..." }
     """
 
     try:
-        playlist = Playlist.objects.get(uid=playlist_uid, owner=request.user)
+        playlist = Playlist.objects.get(id=playlist_id, owner=request.user)
     except Playlist.DoesNotExist:
         return error_response({'message': 'Playlist not found'})
 
