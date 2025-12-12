@@ -637,6 +637,77 @@ def get_banner_ads(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def get_chunk_upload_url(request):
+    """
+    Get a presigned URL for direct chunk upload to R2/S3.
+    Client uploads directly to cloud storage, bypassing the server.
+    
+    Expected request data (camelCase):
+    - videoId: ID of the video being uploaded
+    - chunkIndex: Current chunk number (0-based)
+    - totalChunks: Total number of chunks
+    """
+    try:
+        import boto3
+        from botocore.config import Config
+        from django.conf import settings
+        
+        video_id = request.data.get('videoId')
+        chunk_index = request.data.get('chunkIndex')
+        total_chunks = request.data.get('totalChunks')
+        
+        if not all([video_id, chunk_index is not None, total_chunks]):
+            return error_response({
+                'error': 'Missing required fields',
+                'required': ['videoId', 'chunkIndex', 'totalChunks']
+            })
+        
+        try:
+            chunk_index = int(chunk_index)
+            total_chunks = int(total_chunks)
+        except ValueError:
+            return error_response({'error': 'chunkIndex and totalChunks must be integers'})
+        
+        # Verify video exists (only on first chunk)
+        if chunk_index == 0:
+            if not Video.objects.filter(id=video_id).exists():
+                return error_response({'error': f'Video with id {video_id} not found'})
+        
+        # Generate presigned URL for direct upload
+        chunk_path = f"videos/chunks/{video_id}/chunk_{chunk_index:04d}"
+        
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            endpoint_url=settings.AWS_S3_ENDPOINT_URL,
+            region_name=settings.AWS_S3_REGION_NAME,
+            config=Config(signature_version='s3v4')
+        )
+        
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+                'Key': chunk_path,
+            },
+            ExpiresIn=300  # 5 minutes
+        )
+        
+        return success_response({
+            'upload_url': presigned_url,
+            'chunk_index': chunk_index,
+            'total_chunks': total_chunks,
+            'expires_in': 300
+        })
+        
+    except Exception as e:
+        logger.error(f"Error generating presigned URL: {str(e)}", exc_info=True)
+        return error_response({'error': str(e)})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def upload_chunk(request):
     """
     Upload a chunk of video data for resumable/chunked uploads.

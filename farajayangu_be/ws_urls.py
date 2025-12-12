@@ -1,6 +1,7 @@
 from django.urls import path
-from socket_consumers import VideoStreamConsumer
+from apps.streaming.socket.consumers import VideoProcessorConsumer
 
+# WebSocket URL patterns used by Channels' URLRouter
 ws_urlpatterns = [
-    path("socket/v-stream/<int:video_id>/", VideoStreamConsumer.as_asgi()),
+    path("socket/stream/progress/<int:video_uid>/", VideoProcessorConsumer.as_asgi()),
 ]

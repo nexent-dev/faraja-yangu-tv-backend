@@ -13,6 +13,7 @@ from apps.streaming.services.video_processor import VideoProcessor
 from farajayangu_be.celery import app as celery_app
 from apps.authentication.models import Devices, User
 from apps.authentication.models import Role
+from apps.streaming.socket.utils import send_video_progress, send_video_complete, send_video_error
 logger = logging.getLogger(__name__)
 
 class UserGroupTypes:
@@ -140,6 +141,7 @@ def convert_video_to_hls(self, video_id: int):
         video.processing_status = 'processing'
         video.save(update_fields=['processing_status'])
         
+        send_video_progress(video_id, "converting", 0, "Starting HLS conversion...")
         logger.info(f"Starting HLS conversion for video {video_id}: {video.title}")
         
         # Get the original video file path
@@ -151,11 +153,13 @@ def convert_video_to_hls(self, video_id: int):
         temp_dir = tempfile.gettempdir()
         video_file_path = os.path.join(temp_dir, f"video_{video_id}_original.mp4")
         
+        send_video_progress(video_id, "converting", 5, "Downloading video from storage...")
         logger.info(f"Downloading video from storage: {video.video.name}")
         with default_storage.open(video.video.name, 'rb') as source:
             with open(video_file_path, 'wb') as dest:
                 dest.write(source.read())
         logger.info(f"Video downloaded to: {video_file_path}")
+        send_video_progress(video_id, "converting", 15, "Video downloaded, starting conversion...")
         
         # Define output directory for HLS files (use temp directory, NOT server storage)
         hls_output_dir = f"videos/hls/{video.uid}"  # Remote path in R2
@@ -169,14 +173,18 @@ def convert_video_to_hls(self, video_id: int):
         )
         
         # Convert to HLS
+        send_video_progress(video_id, "converting", 20, "Converting to HLS format...")
         result = processor.convert_to_hls()
         
         if not result['success']:
             raise Exception(result.get('error', 'Unknown conversion error'))
         
+        send_video_progress(video_id, "converting", 70, "Conversion complete, uploading HLS files...")
+        
         # Upload HLS files from temp directory to R2 storage
         uploaded_paths = upload_hls_files_to_storage(local_hls_dir, hls_output_dir)
         logger.info(f"Uploaded {len(uploaded_paths)} files to R2 storage")
+        send_video_progress(video_id, "converting", 90, f"Uploaded {len(uploaded_paths)} HLS files")
         
         # Update video object with HLS information
         video.hls_path = hls_output_dir
@@ -206,6 +214,7 @@ def convert_video_to_hls(self, video_id: int):
         
         logger.info(f"Successfully converted video {video_id} to HLS")
         
+        send_video_complete(video_id, "Video processing completed successfully", hls_output_dir)
         send_push_notification(UserGroupTypes.CLIENTS, NotificationTypes.NEW_VIDEO, title=f"{video.category.name} | {video.title}", message=f"Hi, --username--! we have a new {video.category.name} video uploaded", metadata={"video_id": video_id})
         
         return {
@@ -217,10 +226,12 @@ def convert_video_to_hls(self, video_id: int):
         
     except Video.DoesNotExist:
         logger.error(f"Video {video_id} not found")
+        send_video_error(video_id, "Video not found")
         return {'success': False, 'error': 'Video not found'}
         
     except Exception as e:
         logger.error(f"Error converting video {video_id} to HLS: {str(e)}")
+        send_video_error(video_id, "HLS conversion failed", str(e))
         
         # Update video status to failed
         try:
@@ -320,6 +331,7 @@ def assemble_chunks_task(self, video_id: int, filename: str):
     
     try:
         video = Video.objects.get(id=video_id)
+        send_video_progress(video_id, "assembling", 0, "Starting chunk assembly...")
         
         chunk_dir = f"videos/chunks/{video_id}"
         
@@ -334,26 +346,33 @@ def assemble_chunks_task(self, video_id: int, filename: str):
         
         if not chunk_files:
             logger.error(f"No chunks found for video {video_id}")
+            send_video_error(video_id, "No chunks found for this video")
             return {'success': False, 'error': 'No chunks found for this video'}
         
-        logger.info(f"Assembling {len(chunk_files)} chunks for video {video_id}")
+        total_chunks = len(chunk_files)
+        logger.info(f"Assembling {total_chunks} chunks for video {video_id}")
+        send_video_progress(video_id, "assembling", 5, f"Found {total_chunks} chunks to assemble")
         
         final_video_path = f"videos/originals/{video_id}_{filename}"
         
         assembled_content = io.BytesIO()
         
-        for chunk_path in chunk_files:
+        for i, chunk_path in enumerate(chunk_files):
             chunk_file = default_storage.open(chunk_path, 'rb')
             assembled_content.write(chunk_file.read())
             chunk_file.close()
+            progress = int(10 + (i + 1) / total_chunks * 40)
+            send_video_progress(video_id, "assembling", progress, f"Reading chunk {i + 1}/{total_chunks}")
         
+        send_video_progress(video_id, "assembling", 55, "Saving assembled video...")
         assembled_content.seek(0)
         final_path = default_storage.save(final_video_path, ContentFile(assembled_content.read()))
         
         video.video = final_path
         video.save()
+        send_video_progress(video_id, "assembling", 70, "Video saved, cleaning up chunks...")
         
-        for chunk_path in chunk_files:
+        for i, chunk_path in enumerate(chunk_files):
             try:
                 default_storage.delete(chunk_path)
             except Exception as e:
@@ -366,12 +385,14 @@ def assemble_chunks_task(self, video_id: int, filename: str):
             logger.warning(f"Could not delete chunk directory {chunk_dir}: {str(e)}")
         
         logger.info(f"Successfully assembled video {video_id} at {final_path}")
+        send_video_progress(video_id, "assembling", 100, "Assembly complete, starting HLS conversion...")
         
         try:
             task = convert_video_to_hls.delay(video.id)
             logger.info(f"Queued HLS conversion task {task.id} for video {video.id}")
         except Exception as e:
             logger.error(f"Could not queue video conversion task: {str(e)}", exc_info=True)
+            send_video_error(video_id, "Could not start HLS conversion", str(e))
         
         return {
             'success': True,
@@ -382,10 +403,12 @@ def assemble_chunks_task(self, video_id: int, filename: str):
         
     except Video.DoesNotExist:
         logger.error(f"Video {video_id} not found")
+        send_video_error(video_id, "Video not found")
         return {'success': False, 'error': 'Video not found'}
         
     except Exception as e:
         logger.error(f"Error assembling chunks for video {video_id}: {str(e)}", exc_info=True)
+        send_video_error(video_id, "Error assembling video", str(e))
         raise
 
 

@@ -33,6 +33,7 @@ urlpatterns = [
     path('delete-video/<int:pk>/', views.delete_video, name='delete-video'),
     
     # Chunked upload endpoints
+    path('get-chunk-upload-url/', views.get_chunk_upload_url, name='get-chunk-upload-url'),
     path('upload-chunk/', views.upload_chunk, name='upload-chunk'),
     path('assemble-chunks/', views.assemble_chunks, name='assemble-chunks'),
     

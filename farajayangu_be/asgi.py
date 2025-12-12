@@ -10,7 +10,7 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'farajayangu_be.settings.base')
 django.setup()
 
 # Import routing after Django is set up to avoid app registry errors
-from .ws_urls import ws_urlpatterns
+from farajayangu_be.ws_urls import ws_urlpatterns
 
 logger = logging.getLogger(__name__)
 
