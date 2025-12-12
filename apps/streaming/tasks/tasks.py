@@ -304,6 +304,136 @@ def cleanup_local_files(video_file_path: str, hls_dir: str):
 
 
 @celery_app.task(bind=True)
+def assemble_chunks_task(self, video_id: int, filename: str):
+    """
+    Assemble uploaded chunks into a complete video file in the background.
+    
+    Args:
+        video_id: ID of the Video object
+        filename: Original filename for the assembled video
+        
+    Returns:
+        Dictionary with assembly results
+    """
+    import io
+    from django.core.files.base import ContentFile
+    
+    try:
+        video = Video.objects.get(id=video_id)
+        
+        chunk_dir = f"videos/chunks/{video_id}"
+        
+        chunk_files = []
+        chunk_index = 0
+        while True:
+            chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}")
+            if not default_storage.exists(chunk_path):
+                break
+            chunk_files.append(chunk_path)
+            chunk_index += 1
+        
+        if not chunk_files:
+            logger.error(f"No chunks found for video {video_id}")
+            return {'success': False, 'error': 'No chunks found for this video'}
+        
+        logger.info(f"Assembling {len(chunk_files)} chunks for video {video_id}")
+        
+        final_video_path = f"videos/originals/{video_id}_{filename}"
+        
+        assembled_content = io.BytesIO()
+        
+        for chunk_path in chunk_files:
+            chunk_file = default_storage.open(chunk_path, 'rb')
+            assembled_content.write(chunk_file.read())
+            chunk_file.close()
+        
+        assembled_content.seek(0)
+        final_path = default_storage.save(final_video_path, ContentFile(assembled_content.read()))
+        
+        video.video = final_path
+        video.save()
+        
+        for chunk_path in chunk_files:
+            try:
+                default_storage.delete(chunk_path)
+            except Exception as e:
+                logger.warning(f"Could not delete chunk {chunk_path}: {str(e)}")
+        
+        try:
+            if hasattr(default_storage, 'delete'):
+                default_storage.delete(chunk_dir)
+        except Exception as e:
+            logger.warning(f"Could not delete chunk directory {chunk_dir}: {str(e)}")
+        
+        logger.info(f"Successfully assembled video {video_id} at {final_path}")
+        
+        try:
+            task = convert_video_to_hls.delay(video.id)
+            logger.info(f"Queued HLS conversion task {task.id} for video {video.id}")
+        except Exception as e:
+            logger.error(f"Could not queue video conversion task: {str(e)}", exc_info=True)
+        
+        return {
+            'success': True,
+            'video_id': video.id,
+            'video_path': final_path,
+            'chunks_assembled': len(chunk_files)
+        }
+        
+    except Video.DoesNotExist:
+        logger.error(f"Video {video_id} not found")
+        return {'success': False, 'error': 'Video not found'}
+        
+    except Exception as e:
+        logger.error(f"Error assembling chunks for video {video_id}: {str(e)}", exc_info=True)
+        raise
+
+
+@celery_app.task(bind=True)
+def delete_video_files_task(self, hls_path: str, video_uid: str):
+    """
+    Delete HLS files and related video assets from storage in the background.
+    
+    Args:
+        hls_path: Path to the HLS directory (e.g., 'videos/hls/<uid>')
+        video_uid: The video's unique identifier
+        
+    Returns:
+        Dictionary with deletion results
+    """
+    deleted_count = 0
+    
+    try:
+        if hls_path:
+            try:
+                _, files = default_storage.listdir(hls_path)
+                for filename in files:
+                    file_path = f"{hls_path}/{filename}"
+                    try:
+                        default_storage.delete(file_path)
+                        deleted_count += 1
+                        logger.debug(f"Deleted HLS file: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not delete file {file_path}: {e}")
+                
+                try:
+                    default_storage.delete(hls_path)
+                    logger.debug(f"Deleted HLS directory: {hls_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete HLS directory {hls_path}: {e}")
+                    
+            except FileNotFoundError:
+                logger.info(f"HLS directory not found: {hls_path}")
+        
+        logger.info(f"Deleted {deleted_count} files for video {video_uid}")
+        return {'success': True, 'deleted': deleted_count, 'video_uid': video_uid}
+        
+    except Exception as e:
+        logger.error(f"Error deleting video files for {video_uid}: {str(e)}", exc_info=True)
+        return {'success': False, 'error': str(e)}
+
+
+@celery_app.task(bind=True)
 def cleanup_stale_chunks(self):
     """
     Clean up chunk files older than 12 hours.

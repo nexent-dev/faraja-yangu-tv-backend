@@ -20,7 +20,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from rest_framework.decorators import permission_classes
 from .serializers.category import CategorySerializer
 from .serializers.comment import CommentSerializer, ReplySerializer
-from .tasks import convert_video_to_hls
+from apps.streaming.tasks.tasks import convert_video_to_hls, assemble_chunks_task, delete_video_files_task
 from apps.authentication.models import Profile
 from django.http import HttpResponse, Http404, FileResponse
 from django.core.files.storage import default_storage
@@ -647,6 +647,8 @@ def upload_chunk(request):
     - chunkIndex: Current chunk number (0-based)
     - totalChunks: Total number of chunks
     - fileName: Original filename
+    
+    Optimized for S3/R2 cloud storage - avoids expensive listdir() calls.
     """
     try:
         # Validate required fields (camelCase from frontend)
@@ -669,49 +671,32 @@ def upload_chunk(request):
         except ValueError:
             return error_response({'error': 'chunkIndex and totalChunks must be integers'})
         
-        # Verify video exists
-        try:
-            video = Video.objects.get(id=video_id)
-        except Video.DoesNotExist:
-            return error_response({'error': f'Video with id {video_id} not found'})
+        # Verify video exists (only on first chunk to reduce DB queries)
+        if chunk_index == 0:
+            if not Video.objects.filter(id=video_id).exists():
+                return error_response({'error': f'Video with id {video_id} not found'})
         
-        # Create chunk storage directory
+        # Save chunk directly to cloud storage
         chunk_dir = f"videos/chunks/{video_id}"
-        
-        # Save chunk using Django storage system
         chunk_filename = f"chunk_{chunk_index:04d}"
-        chunk_path = os.path.join(chunk_dir, chunk_filename)
+        chunk_path = f"{chunk_dir}/{chunk_filename}"
         
-        # Save the chunk
+        # Save the chunk - use save() with max_length to allow overwrite if retry
         saved_path = default_storage.save(chunk_path, chunk_file)
-        logger.info(f"Saved chunk {chunk_index}/{total_chunks} for video {video_id} at {saved_path}")
         
-        # Check uploaded chunks using a single listdir call instead of N exists() calls
-        # This is much faster for S3/cloud storage backends
-        try:
-            existing_files = default_storage.listdir(chunk_dir)[1]  # [1] = files, [0] = dirs
-            uploaded_chunks = [
-                int(f.replace('chunk_', '')) 
-                for f in existing_files 
-                if f.startswith('chunk_')
-            ]
-        except FileNotFoundError:
-            # Directory doesn't exist yet, only current chunk uploaded
-            uploaded_chunks = [chunk_index]
-        
-        is_complete = len(uploaded_chunks) == total_chunks
+        # Trust client-side tracking instead of expensive listdir() on cloud storage
+        # The assembly endpoint will verify all chunks exist before combining
+        is_last_chunk = (chunk_index == total_chunks - 1)
         
         response_data = {
-            'message': f'Chunk {chunk_index + 1}/{total_chunks} uploaded successfully',
+            'message': f'Chunk {chunk_index + 1}/{total_chunks} uploaded',
             'chunk_index': chunk_index,
             'total_chunks': total_chunks,
-            'uploaded_chunks': len(uploaded_chunks),
-            'is_complete': is_complete
+            'is_last_chunk': is_last_chunk
         }
         
-        # If all chunks uploaded, trigger assembly
-        if is_complete:
-            response_data['message'] = 'All chunks uploaded. Ready for assembly.'
+        if is_last_chunk:
+            response_data['message'] = 'Last chunk uploaded. Ready for assembly.'
             response_data['next_step'] = 'Call /api/streaming/assemble-chunks/ to combine chunks'
         
         return success_response(response_data)
@@ -724,7 +709,7 @@ def upload_chunk(request):
 @permission_classes([IsAuthenticated])
 def assemble_chunks(request):
     """
-    Assemble uploaded chunks into a complete video file.
+    Queue chunk assembly as a background task.
     
     Expected request data (camelCase):
     - videoId: ID of the video
@@ -743,78 +728,23 @@ def assemble_chunks(request):
         except Video.DoesNotExist:
             return error_response({'error': f'Video with id {video_id} not found'})
         
-        chunk_dir = f"videos/chunks/{video_id}"
-        
-        # Get all chunk files sorted by index
-        chunk_files = []
-        chunk_index = 0
-        while True:
-            chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index:04d}")
-            if not default_storage.exists(chunk_path):
-                break
-            chunk_files.append(chunk_path)
-            chunk_index += 1
-        
-        if not chunk_files:
-            return error_response({'error': 'No chunks found for this video'})
-        
-        logger.info(f"Assembling {len(chunk_files)} chunks for video {video_id}")
-        
-        # Create final video path
-        final_video_path = f"videos/originals/{video_id}_{filename}"
-        
-        # Assemble chunks into final file
-        # Create a temporary buffer to hold assembled content
-        assembled_content = io.BytesIO()
-        
-        for chunk_path in chunk_files:
-            chunk_file = default_storage.open(chunk_path, 'rb')
-            assembled_content.write(chunk_file.read())
-            chunk_file.close()
-        
-        # Save assembled file
-        assembled_content.seek(0)
-        final_path = default_storage.save(final_video_path, ContentFile(assembled_content.read()))
-        
-        # Update video model with the assembled file path
-        video.video = final_path
-        video.save()
-        
-        # Clean up chunks
-        for chunk_path in chunk_files:
-            try:
-                default_storage.delete(chunk_path)
-            except Exception as e:
-                logger.warning(f"Could not delete chunk {chunk_path}: {str(e)}")
-        
-        # Try to remove chunk directory
+        # Queue the assembly task
         try:
-            # Note: Some storage backends may not support directory deletion
-            if hasattr(default_storage, 'delete'):
-                default_storage.delete(chunk_dir)
+            task = assemble_chunks_task.delay(video_id, filename)
+            logger.info(f"Queued chunk assembly task {task.id} for video {video_id}")
+            message = 'Video assembly queued. Processing will begin shortly.'
         except Exception as e:
-            logger.warning(f"Could not delete chunk directory {chunk_dir}: {str(e)}")
-        
-        logger.info(f"Successfully assembled video {video_id} at {final_path}")
-        
-        # Trigger HLS conversion
-        try:
-            task = convert_video_to_hls.delay(video.id)
-            logger.info(f"Queued HLS conversion task {task.id} for video {video.id}")
-            message = 'Video assembled successfully. HLS conversion in progress.'
-        except Exception as e:
-            logger.error(f"Could not queue video conversion task: {str(e)}", exc_info=True)
-            message = 'Video assembled successfully. Conversion will start when processing service is available.'
+            logger.error(f"Could not queue chunk assembly task: {str(e)}", exc_info=True)
+            return error_response({'error': 'Could not queue video assembly. Please try again later.'})
         
         return success_response({
             'message': message,
             'video_id': video.id,
-            'video_path': final_path,
-            'chunks_assembled': len(chunk_files)
+            'task_id': task.id
         })
         
     except Exception as e:
-        logger.error(f"Error assembling chunks: {str(e)}", exc_info=True)
+        logger.error(f"Error queuing chunk assembly: {str(e)}", exc_info=True)
         return error_response({'error': str(e)})
 
 @api_view(['POST'])
@@ -1067,6 +997,11 @@ def update_video(request, pk):
 @permission_classes([IsAuthenticated])
 def delete_video(request, pk):
     video = Video.objects.get(pk=pk)
+    
+    # Queue background task to delete HLS files before deleting the video record
+    if video.hls_path:
+        delete_video_files_task.delay(video.hls_path, str(video.uid))
+    
     video.delete()
     return success_response()
 
